@@ -1,0 +1,79 @@
+[2025-03-08 18:17:16 +0100] [15801] [INFO] Starting gunicorn 23.0.0
+[2025-03-08 18:17:16 +0100] [15801] [INFO] Listening at: http://0.0.0.0:10000 (15801)
+[2025-03-08 18:17:16 +0100] [15801] [INFO] Using worker: sync
+[2025-03-08 18:17:16 +0100] [15808] [INFO] Booting worker with pid: 15808
+2025-03-08 18:17:17,172 - main - INFO - Starting application initialization...
+2025-03-08 18:17:17,182 - main - INFO - System Information: {
+  "Python Version": "3.8.12 (default, Dec 11 2024, 21:37:05) \n[Clang 15.0.0 (clang-1500.3.9.4)]",
+  "Platform": "macOS-15.1-arm64-arm-64bit",
+  "Working Directory": "/Users/jujuk/my-node-app/my-next-app/api/flask-app",
+  "Environment Variables": {
+    "MallocNanoZone": "0",
+    "USER": "jujuk",
+    "COMMAND_MODE": "unix2003",
+    "__CFBundleIdentifier": "com.todesktop.230313mzl4w4u92",
+    "PATH": "/Users/jujuk/.pyenv/versions/3.8.12/bin:/usr/local/bin:/Users/jujuk/.pyenv/versions/3.8.12/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.12/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/jujuk/.pyenv/versions/3.8.12/bin",
+    "LOGNAME": "jujuk",
+    "SSH_AUTH_SOCK": "/private/tmp/com.apple.launchd.7DzfybmXCd/Listeners",
+    "HOME": "/Users/jujuk",
+    "SHELL": "/bin/zsh",
+    "TMPDIR": "/var/folders/hn/8b1bdxcd3jsd5bl1d1jzs69w0000gn/T/",
+    "__CF_USER_TEXT_ENCODING": "0x1F5:0x0:0x0",
+    "XPC_SERVICE_NAME": "0",
+    "XPC_FLAGS": "0x0",
+    "ORIGINAL_XDG_CURRENT_DESKTOP": "undefined",
+    "CURSOR_TRACE_ID": "01f046372e394dc9ac8b7f3bd7185a0c",
+    "SHLVL": "1",
+    "PWD": "/Users/jujuk/my-node-app/my-next-app/api/flask-app",
+    "OLDPWD": "/Users/jujuk/my-node-app/my-next-app",
+    "HOMEBREW_PREFIX": "/opt/homebrew",
+    "HOMEBREW_CELLAR": "/opt/homebrew/Cellar",
+    "HOMEBREW_REPOSITORY": "/opt/homebrew",
+    "INFOPATH": "/opt/homebrew/share/info:/opt/homebrew/share/info:",
+    "PKG_CONFIG_PATH": "/usr/local/lib/pkgconfig:/usr/local/lib/pkgconfig:",
+    "LD_LIBRARY_PATH": "/usr/local/lib:/usr/local/lib:",
+    "TERM_PROGRAM": "vscode",
+    "TERM_PROGRAM_VERSION": "0.46.8",
+    "LANG": "en_US.UTF-8",
+    "COLORTERM": "truecolor",
+    "GIT_ASKPASS": "/Applications/Cursor.app/Contents/Resources/app/extensions/git/dist/askpass.sh",
+    "VSCODE_GIT_ASKPASS_NODE": "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper (Plugin).app/Contents/MacOS/Cursor Helper (Plugin)",
+    "VSCODE_GIT_ASKPASS_EXTRA_ARGS": "",
+    "VSCODE_GIT_ASKPASS_MAIN": "/Applications/Cursor.app/Contents/Resources/app/extensions/git/dist/askpass-main.js",
+    "VSCODE_GIT_IPC_HANDLE": "/var/folders/hn/8b1bdxcd3jsd5bl1d1jzs69w0000gn/T/vscode-git-fd9fdc1e19.sock",
+    "DATABASE_URL": "postgresql://johndoe:randompassword@localhost:5432/mydb?schema=public",
+    "VSCODE_INJECTION": "1",
+    "ZDOTDIR": "/Users/jujuk",
+    "USER_ZDOTDIR": "/Users/jujuk",
+    "TERM": "xterm-256color",
+    "DYLD_LIBRARY_PATH": "/usr/local/lib:",
+    "_": "/Users/jujuk/.pyenv/versions/3.8.12/bin/gunicorn",
+    "SERVER_SOFTWARE": "gunicorn/23.0.0"
+  },
+  "Static Folder": "/Users/jujuk/my-node-app/my-next-app/api/flask-app/static",
+  "Directory Contents": [
+    "firebase-credentials-base64.txt",
+    "firebase-credentials.json",
+    "requirements.txt",
+    "Dockerfile",
+    "env.yaml",
+    "__pycache__",
+    "gunicorn.log",
+    ".env",
+    "static",
+    "firebase_credentials_b64.txt",
+    "deploy.sh",
+    "main.py",
+    "start.sh",
+    "wsgi.py"
+  ],
+  "Render Info": {
+    "Is Render": false,
+    "Service Name": "unknown",
+    "External URL": "unknown",
+    "Git Branch": "unknown",
+    "Git Commit": "unknown",
+    "Port": "10000"
+  }
+}
+2025-03-08 18:17:17,183 - main - INFO - Static folder path: /Users/jujuk/my-node-app/my-next-app/api/flask-app/static

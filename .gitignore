@@ -1,0 +1,12 @@
+venv
+__pycache__
+*.pyc
+.env
+.DS_Store
+.pytest_cache
+.coverage
+instance/
+*.db
+firebase-credentials.json
+firebase-credentials-base64.txt
+firebase_credentials_b64.txt
