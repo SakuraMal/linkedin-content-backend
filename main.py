@@ -61,7 +61,7 @@ if os.environ.get('RENDER'):
     CORS(app, origins=[frontend_url])
     logger.info(f"CORS configured for frontend URL: {frontend_url}")
 else:
-    CORS(app)
+    CORS(app, origins=os.getenv('CORS_ORIGINS', 'http://localhost:3000').split(','))
     logger.info("CORS configured for development (all origins allowed)")
 
 # Initialize Firebase lazily only when needed
@@ -226,6 +226,14 @@ def test_gcs():
             'status': 'error',
             'message': str(e)
         }), 500
+
+@app.route('/api/health', methods=['GET'])
+def health_check_api():
+    return jsonify({
+        'status': 'healthy',
+        'service': 'linkedin-content-backend',
+        'version': '1.0.0'
+    })
 
 if __name__ == '__main__':
     try:
