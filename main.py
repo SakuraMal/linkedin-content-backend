@@ -12,6 +12,7 @@ import tempfile
 import gc
 import platform
 import requests
+from datetime import datetime
 
 # Configure logging first
 logging.basicConfig(
@@ -238,11 +239,50 @@ def health_check_api():
 @app.route('/health/live')
 def health_check_live():
     """Live health check endpoint for Fly.io"""
-    return jsonify({
-        "status": "healthy",
-        "service": "linkedin-content-backend",
-        "version": os.environ.get('VERSION', '1.0.0')
-    })
+    try:
+        # Basic application check
+        gc.collect()  # Run garbage collection
+        
+        # Log the health check
+        logger.info("Health check (live) endpoint called")
+        
+        return jsonify({
+            "status": "healthy",
+            "service": "linkedin-content-backend",
+            "version": os.environ.get('VERSION', '1.0.0'),
+            "timestamp": datetime.utcnow().isoformat(),
+            "port": os.environ.get('PORT', '8080')
+        }), 200
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e)
+        }), 500
+
+@app.route('/health/ready')
+def health_check_ready():
+    """Readiness check endpoint for Fly.io"""
+    try:
+        # More comprehensive health check
+        gc.collect()
+        
+        # Log the health check
+        logger.info("Health check (ready) endpoint called")
+        
+        return jsonify({
+            "status": "healthy",
+            "service": "linkedin-content-backend",
+            "version": os.environ.get('VERSION', '1.0.0'),
+            "timestamp": datetime.utcnow().isoformat(),
+            "port": os.environ.get('PORT', '8080')
+        }), 200
+    except Exception as e:
+        logger.error(f"Readiness check failed: {str(e)}")
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e)
+        }), 500
 
 if __name__ == '__main__':
     try:
