@@ -13,6 +13,8 @@ import gc
 import platform
 import requests
 from datetime import datetime
+import signal
+import atexit
 
 # Configure logging first
 logging.basicConfig(
@@ -21,6 +23,25 @@ logging.basicConfig(
     stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
+
+# Global flag for graceful shutdown
+is_shutting_down = False
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    global is_shutting_down
+    logger.info(f"Received signal {signum}. Starting graceful shutdown...")
+    is_shutting_down = True
+
+def cleanup():
+    """Cleanup function to be called on shutdown"""
+    logger.info("Performing cleanup before shutdown...")
+    gc.collect()
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+atexit.register(cleanup)
 
 def log_system_info():
     """Log detailed system information"""
@@ -240,6 +261,13 @@ def health_check_api():
 def health_check_live():
     """Live health check endpoint for Fly.io"""
     try:
+        if is_shutting_down:
+            logger.warning("Health check called during shutdown")
+            return jsonify({
+                "status": "shutting_down",
+                "message": "Server is shutting down"
+            }), 503
+
         # Basic application check
         gc.collect()  # Run garbage collection
         
@@ -264,6 +292,13 @@ def health_check_live():
 def health_check_ready():
     """Readiness check endpoint for Fly.io"""
     try:
+        if is_shutting_down:
+            logger.warning("Readiness check called during shutdown")
+            return jsonify({
+                "status": "shutting_down",
+                "message": "Server is shutting down"
+            }), 503
+
         # More comprehensive health check
         gc.collect()
         
@@ -288,7 +323,23 @@ if __name__ == '__main__':
     try:
         port = int(os.environ.get('PORT', 8080))
         logger.info(f"Starting Flask app on port {port}")
-        app.run(host='0.0.0.0', port=port, debug=False)
+        logger.info(f"Current working directory: {os.getcwd()}")
+        logger.info(f"Python version: {sys.version}")
+        logger.info(f"Platform: {platform.platform()}")
+        
+        # Ensure the port is available
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(('0.0.0.0', port))
+        sock.close()
+        
+        app.run(
+            host='0.0.0.0',
+            port=port,
+            debug=False,
+            use_reloader=False,  # Disable reloader in production
+            threaded=True  # Enable threading
+        )
     except Exception as e:
         logger.error(f"Failed to start server: {str(e)}")
         logger.error(traceback.format_exc())
