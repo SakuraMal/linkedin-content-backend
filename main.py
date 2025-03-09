@@ -1,5 +1,6 @@
 import os
 import sys
+import platform
 import traceback
 from flask import Flask, jsonify, send_from_directory, send_file, request
 from flask_cors import CORS
@@ -10,7 +11,6 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import tempfile
 import gc
-import platform
 import requests
 from datetime import datetime
 import signal
@@ -23,6 +23,13 @@ logging.basicConfig(
     stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
+
+def log_system_info():
+    """Log system information including environment details"""
+    logger.info(f"Current working directory: {os.getcwd()}")
+    logger.info(f"Python version: {sys.version}")
+    logger.info(f"Platform: {platform.platform()}")
+    logger.info(f"Environment variables: PORT={os.environ.get('PORT', '8080')}")
 
 def create_app():
     """Create and configure the Flask application"""
