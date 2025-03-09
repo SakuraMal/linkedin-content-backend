@@ -36,7 +36,7 @@ def log_system_info():
             "External URL": os.environ.get('RENDER_EXTERNAL_URL', 'unknown'),
             "Git Branch": os.environ.get('RENDER_GIT_BRANCH', 'unknown'),
             "Git Commit": os.environ.get('RENDER_GIT_COMMIT', 'unknown'),
-            "Port": os.environ.get('PORT', '10000')
+            "Port": os.environ.get('PORT', '8080')
         }
     }
     logger.info(f"System Information: {json.dumps(info, indent=2)}")
@@ -181,7 +181,7 @@ def health_check():
         "tier": "free",
         "static_folder": app.static_folder,
         "static_files": static_files,
-        "port": os.environ.get('PORT', '10000'),
+        "port": os.environ.get('PORT', '8080'),
         "working_directory": os.getcwd()
     })
 
@@ -235,9 +235,18 @@ def health_check_api():
         'version': '1.0.0'
     })
 
+@app.route('/health/live')
+def health_check_live():
+    """Live health check endpoint for Fly.io"""
+    return jsonify({
+        "status": "healthy",
+        "service": "linkedin-content-backend",
+        "version": os.environ.get('VERSION', '1.0.0')
+    })
+
 if __name__ == '__main__':
     try:
-        port = int(os.environ.get('PORT', 10000))
+        port = int(os.environ.get('PORT', 8080))
         logger.info(f"Starting Flask app on port {port}")
         app.run(host='0.0.0.0', port=port, debug=False)
     except Exception as e:
