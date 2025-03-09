@@ -62,10 +62,15 @@ def create_app():
     signal.signal(signal.SIGINT, signal_handler)
     atexit.register(cleanup)
 
-    @app.before_first_request
-    def before_first_request():
-        """Log system information before the first request"""
-        log_system_info()
+    # Initialize system info flag
+    app.config['SYSTEM_INFO_LOGGED'] = False
+
+    @app.before_request
+    def before_request():
+        """Log system information on the first request"""
+        if not app.config['SYSTEM_INFO_LOGGED']:
+            log_system_info()
+            app.config['SYSTEM_INFO_LOGGED'] = True
 
     @app.route('/health/live')
     def health_check_live():
