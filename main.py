@@ -26,9 +26,6 @@ logger = logging.getLogger(__name__)
 
 def create_app():
     """Create and configure the Flask application"""
-    # Log system information at startup
-    log_system_info()
-    
     # Initialize Flask app with static files path
     static_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
     os.makedirs(static_folder, exist_ok=True)  # Ensure the directory exists
