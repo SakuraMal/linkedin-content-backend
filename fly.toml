@@ -27,12 +27,13 @@ primary_region = "mad"
     soft_limit = 500
 
   [[http_service.checks]]
-    interval = "10s"
+    interval = "30s"
     timeout = "5s"
     grace_period = "10s"
     method = "GET"
     path = "/health/live"
     protocol = "http"
+    tls_skip_verify = true
 
 [[vm]]
   memory = '1gb'
