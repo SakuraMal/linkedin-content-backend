@@ -6,6 +6,10 @@ import uuid
 
 video_routes = Blueprint('video', __name__)
 
+# In-memory storage for demo purposes
+# In production, this would be a database
+video_jobs = {}
+
 def validate_video_request(data: dict) -> tuple[bool, Optional[str]]:
     """Validate the video generation request data."""
     required_fields = ['content', 'style', 'duration']
@@ -56,11 +60,17 @@ def generate_video():
     # Generate a unique ID for this video generation request
     generation_id = str(uuid.uuid4())
     
-    # In a real implementation, this would:
-    # 1. Queue the video generation job
-    # 2. Start processing in the background
-    # 3. Store progress in a database
-    # For now, we'll return a mock response
+    # Store job information
+    video_jobs[generation_id] = {
+        'content': data['content'],
+        'style': data['style'],
+        'duration': data['duration'],
+        'status': 'queued',
+        'progress': 0,
+        'created_at': datetime.now().isoformat(),
+        'updated_at': datetime.now().isoformat(),
+        'error': None
+    }
     
     return jsonify({
         'status': 'success',
@@ -71,6 +81,42 @@ def generate_video():
             'status': 'queued',
             'content_preview': data['content'][:100] + '...' if len(data['content']) > 100 else data['content'],
             'style': data['style'],
-            'created_at': datetime.now().isoformat()
+            'created_at': video_jobs[generation_id]['created_at']
         }
-    }), 202  # 202 Accepted indicates the request was valid but processing is ongoing 
+    }), 202
+
+@video_routes.route('/status/<generation_id>', methods=['GET'])
+def get_video_status(generation_id):
+    """Get the status of a video generation job."""
+    if generation_id not in video_jobs:
+        return jsonify({
+            'status': 'error',
+            'message': 'Video generation job not found'
+        }), 404
+    
+    job = video_jobs[generation_id]
+    
+    # For demo purposes, simulate progress
+    if job['status'] == 'queued':
+        job['status'] = 'processing'
+        job['progress'] = 10
+    elif job['status'] == 'processing' and job['progress'] < 100:
+        job['progress'] += 20
+        if job['progress'] >= 100:
+            job['status'] = 'completed'
+            job['progress'] = 100
+    
+    job['updated_at'] = datetime.now().isoformat()
+    
+    return jsonify({
+        'status': 'success',
+        'data': {
+            'generation_id': generation_id,
+            'status': job['status'],
+            'progress': job['progress'],
+            'style': job['style'],
+            'created_at': job['created_at'],
+            'updated_at': job['updated_at'],
+            'error': job['error']
+        }
+    }) 
