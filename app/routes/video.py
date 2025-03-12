@@ -3,12 +3,22 @@ import os
 from datetime import datetime
 from typing import Optional
 import uuid
+import json
+import redis
+from urllib.parse import urlparse
 
 video_routes = Blueprint('video', __name__)
 
-# In-memory storage for demo purposes
-# In production, this would be a database
-video_jobs = {}
+# Initialize Redis client
+redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+parsed_url = urlparse(redis_url)
+redis_client = redis.Redis(
+    host=parsed_url.hostname or 'localhost',
+    port=parsed_url.port or 6379,
+    password=parsed_url.password,
+    ssl=parsed_url.scheme == 'rediss',
+    decode_responses=True
+)
 
 def validate_video_request(data: dict) -> tuple[bool, Optional[str]]:
     """Validate the video generation request data."""
@@ -37,11 +47,19 @@ def validate_video_request(data: dict) -> tuple[bool, Optional[str]]:
 @video_routes.route('/test-setup', methods=['GET'])
 def test_video_setup():
     """Test endpoint to verify video generation setup."""
+    try:
+        # Test Redis connection
+        redis_client.ping()
+        redis_status = "connected"
+    except redis.ConnectionError:
+        redis_status = "disconnected"
+
     return jsonify({
         'status': 'ok',
         'timestamp': datetime.now().isoformat(),
         'service': 'video-generation',
-        'environment': os.getenv('FLASK_ENV', 'development')
+        'environment': os.getenv('FLASK_ENV', 'development'),
+        'redis_status': redis_status
     })
 
 @video_routes.route('/generate', methods=['POST'])
@@ -60,8 +78,8 @@ def generate_video():
     # Generate a unique ID for this video generation request
     generation_id = str(uuid.uuid4())
     
-    # Store job information
-    video_jobs[generation_id] = {
+    # Store job information in Redis
+    job_data = {
         'content': data['content'],
         'style': data['style'],
         'duration': data['duration'],
@@ -72,6 +90,13 @@ def generate_video():
         'error': None
     }
     
+    # Store in Redis with 24-hour expiration
+    redis_client.setex(
+        f'video_job:{generation_id}',
+        86400,  # 24 hours in seconds
+        json.dumps(job_data)
+    )
+    
     return jsonify({
         'status': 'success',
         'message': 'Video generation initiated',
@@ -81,20 +106,23 @@ def generate_video():
             'status': 'queued',
             'content_preview': data['content'][:100] + '...' if len(data['content']) > 100 else data['content'],
             'style': data['style'],
-            'created_at': video_jobs[generation_id]['created_at']
+            'created_at': job_data['created_at']
         }
     }), 202
 
 @video_routes.route('/status/<generation_id>', methods=['GET'])
 def get_video_status(generation_id):
     """Get the status of a video generation job."""
-    if generation_id not in video_jobs:
+    # Get job data from Redis
+    job_data = redis_client.get(f'video_job:{generation_id}')
+    
+    if not job_data:
         return jsonify({
             'status': 'error',
             'message': 'Video generation job not found'
         }), 404
     
-    job = video_jobs[generation_id]
+    job = json.loads(job_data)
     
     # For demo purposes, simulate progress
     if job['status'] == 'queued':
@@ -107,6 +135,13 @@ def get_video_status(generation_id):
             job['progress'] = 100
     
     job['updated_at'] = datetime.now().isoformat()
+    
+    # Update job in Redis
+    redis_client.setex(
+        f'video_job:{generation_id}',
+        86400,  # 24 hours in seconds
+        json.dumps(job)
+    )
     
     return jsonify({
         'status': 'success',

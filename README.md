@@ -97,14 +97,39 @@ backend/
 ```http
 POST /api/post/generate
 Content-Type: application/json
-Authorization: Bearer <token>
 
 {
-  "theme": "professional",
-  "tone": "friendly",
-  "length": "medium"
+  "theme": "Leadership & Management",
+  "tone": "Professional",
+  "length": "Medium (500-1000 characters)"
+}
+
+Response:
+{
+  "success": true,
+  "data": {
+    "content": "Generated post content...",
+    "metadata": {
+      "theme": "Leadership & Management",
+      "tone": "Professional",
+      "length": "Medium (500-1000 characters)",
+      "characterCount": 750,
+      "timestamp": "2024-03-11T13:34:29.789689"
+    }
+  }
 }
 ```
+
+Length options:
+- Short (Under 500 characters)
+- Medium (500-1000 characters)
+- Long (1000-1500 characters)
+
+The post generation endpoint uses OpenAI's GPT-3.5-turbo model to create engaging LinkedIn posts based on the specified theme, tone, and length. The service includes:
+- Input validation using Pydantic
+- Automatic retry mechanism for API calls
+- Character count validation
+- Error handling and detailed error messages
 
 ### Video Generation
 ```http
@@ -117,6 +142,18 @@ Authorization: Bearer <token>
   "style": "slideshow"
 }
 ```
+
+## Implementation History
+
+### March 11, 2024
+- Implemented OpenAI integration for post generation
+- Added post generation endpoint with validation
+- Updated dependencies to include OpenAI, Pydantic, and other required packages
+- Added retry mechanism for API calls using tenacity
+- Implemented error handling and logging
+- Added detailed implementation documentation in `IMPLEMENTATION.md`
+
+### Previous Updates
 
 ## Deployment
 

@@ -15,7 +15,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 # Copy application code
-COPY main.py wsgi.py ./
+COPY . .
 
 # Create static directory
 RUN mkdir -p /app/static

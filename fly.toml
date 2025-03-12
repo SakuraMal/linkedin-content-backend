@@ -18,7 +18,7 @@ primary_region = "mad"
   force_https = true
   auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 2
   processes = ["app"]
 
   [http_service.concurrency]
@@ -27,16 +27,20 @@ primary_region = "mad"
     soft_limit = 500
 
   [[http_service.checks]]
-    interval = "30s"
+    interval = "15s"
     timeout = "5s"
-    grace_period = "10s"
+    grace_period = "30s"
     method = "GET"
     path = "/health/live"
     protocol = "http"
     tls_skip_verify = true
 
 [[vm]]
-  memory = '1gb'
+  memory = '2gb'
   cpu_kind = 'shared'
-  cpus = 1
-  memory_mb = 1024
+  cpus = 2
+  memory_mb = 2048
+
+[metrics]
+  port = 9091
+  path = "/metrics"
