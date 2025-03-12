@@ -6,12 +6,19 @@ import uuid
 import json
 import redis
 from urllib.parse import urlparse
+import logging
 
 video_routes = Blueprint('video', __name__)
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Initialize Redis client
 redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
 parsed_url = urlparse(redis_url)
+logger.debug(f"Redis URL (masked password): {redis_url.replace(parsed_url.password or '', '***')}")
+
 redis_client = redis.Redis(
     host=parsed_url.hostname or 'localhost',
     port=parsed_url.port or 6379,
@@ -113,45 +120,70 @@ def generate_video():
 @video_routes.route('/status/<generation_id>', methods=['GET'])
 def get_video_status(generation_id):
     """Get the status of a video generation job."""
-    # Get job data from Redis
-    job_data = redis_client.get(f'video_job:{generation_id}')
+    logger.debug(f"Fetching status for job {generation_id}")
     
-    if not job_data:
+    # Get job data from Redis
+    try:
+        job_data = redis_client.get(f'video_job:{generation_id}')
+        logger.debug(f"Raw Redis data: {job_data}")
+        
+        if not job_data:
+            logger.debug("Job data not found in Redis")
+            return jsonify({
+                'status': 'error',
+                'message': 'Video generation job not found'
+            }), 404
+        
+        job = json.loads(job_data)
+        logger.debug(f"Parsed job data: {job}")
+        
+        # For demo purposes, simulate progress
+        if job['status'] == 'queued':
+            job['status'] = 'processing'
+            job['progress'] = 10
+        elif job['status'] == 'processing' and job['progress'] < 100:
+            job['progress'] += 20
+            if job['progress'] >= 100:
+                job['status'] = 'completed'
+                job['progress'] = 100
+        
+        job['updated_at'] = datetime.now().isoformat()
+        
+        # Update job in Redis
+        redis_client.setex(
+            f'video_job:{generation_id}',
+            86400,  # 24 hours in seconds
+            json.dumps(job)
+        )
+        
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'generation_id': generation_id,
+                'status': job['status'],
+                'progress': job['progress'],
+                'style': job['style'],
+                'created_at': job['created_at'],
+                'updated_at': job['updated_at'],
+                'error': job['error']
+            }
+        })
+    except redis.RedisError as e:
+        logger.error(f"Redis error: {e}")
         return jsonify({
             'status': 'error',
-            'message': 'Video generation job not found'
-        }), 404
-    
-    job = json.loads(job_data)
-    
-    # For demo purposes, simulate progress
-    if job['status'] == 'queued':
-        job['status'] = 'processing'
-        job['progress'] = 10
-    elif job['status'] == 'processing' and job['progress'] < 100:
-        job['progress'] += 20
-        if job['progress'] >= 100:
-            job['status'] = 'completed'
-            job['progress'] = 100
-    
-    job['updated_at'] = datetime.now().isoformat()
-    
-    # Update job in Redis
-    redis_client.setex(
-        f'video_job:{generation_id}',
-        86400,  # 24 hours in seconds
-        json.dumps(job)
-    )
-    
-    return jsonify({
-        'status': 'success',
-        'data': {
-            'generation_id': generation_id,
-            'status': job['status'],
-            'progress': job['progress'],
-            'style': job['style'],
-            'created_at': job['created_at'],
-            'updated_at': job['updated_at'],
-            'error': job['error']
-        }
-    }) 
+            'message': 'Error accessing job data'
+        }), 500
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {e}")
+        logger.error(f"Raw data that failed to parse: {job_data}")
+        return jsonify({
+            'status': 'error',
+            'message': 'Error parsing job data'
+        }), 500
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': 'Internal server error'
+        }), 500 
