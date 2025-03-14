@@ -125,7 +125,7 @@ class VideoGenerator:
             self.update_job_status(redis_client, job_id, "processing_media", progress=50)
             logger.info(f"Processing media with duration: {request.duration}")
             
-            # Calculate segment durations (evenly distribute the total duration)
+            # Calculate segment durations with minimum duration per image
             num_images = len(media_assets.get('images', []))
             if num_images == 0:
                 error_msg = "No images available for processing"
@@ -133,8 +133,20 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
                 
-            segment_duration = request.duration / num_images
+            MIN_DURATION_PER_IMAGE = 3.0  # Minimum seconds per image
+            total_min_duration = MIN_DURATION_PER_IMAGE * num_images
+            
+            if total_min_duration > request.duration:
+                # If minimum durations exceed total duration, distribute evenly
+                segment_duration = request.duration / num_images
+            else:
+                # Calculate extra time to distribute
+                extra_time = request.duration - total_min_duration
+                extra_per_image = extra_time / num_images
+                segment_duration = MIN_DURATION_PER_IMAGE + extra_per_image
+            
             durations = [segment_duration] * num_images
+            logger.info(f"Calculated segment durations: {segment_duration}s per image for {num_images} images")
             
             # Create video segments
             video_segments = media_processor.create_video_segments(media_assets, durations)
