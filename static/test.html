@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Generation Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"], select, input[type="number"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .steps {
+            margin-top: 20px;
+            padding: 0;
+            list-style: none;
+        }
+        .step {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            opacity: 0.6;
+        }
+        .step.active {
+            background-color: #e3f2fd;
+            opacity: 1;
+            border-left: 4px solid #2196F3;
+        }
+        .step.completed {
+            background-color: #e8f5e9;
+            opacity: 1;
+            border-left: 4px solid #4CAF50;
+        }
+        .step.failed {
+            background-color: #ffebee;
+            opacity: 1;
+            border-left: 4px solid #f44336;
+        }
+        .step-number {
+            width: 24px;
+            height: 24px;
+            background-color: #ddd;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 10px;
+            font-size: 14px;
+        }
+        .step.active .step-number {
+            background-color: #2196F3;
+        }
+        .step.completed .step-number {
+            background-color: #4CAF50;
+        }
+        .step.failed .step-number {
+            background-color: #f44336;
+        }
+        #video-preview {
+            margin-top: 20px;
+            max-width: 100%;
+        }
+        .error-message {
+            color: #f44336;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Video Generation Test</h1>
+        <div class="form-group">
+            <label for="content">Content:</label>
+            <input type="text" id="content" placeholder="Enter content for the video">
+        </div>
+        <div class="form-group">
+            <label for="style">Style:</label>
+            <select id="style">
+                <option value="professional">Professional</option>
+                <option value="casual">Casual</option>
+                <option value="dynamic">Dynamic</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="duration">Duration (seconds):</label>
+            <input type="number" id="duration" min="5" max="60" value="30">
+        </div>
+        <button onclick="generateVideo()" id="generate-btn">Generate Video</button>
+        
+        <div id="status" style="display: none;">
+            <h3>Generation Progress</h3>
+            <div class="steps" id="steps-container">
+                <div class="step" data-step="1">
+                    <div class="step-number">1</div>
+                    <div class="step-content">Initializing video generation</div>
+                </div>
+                <div class="step" data-step="2">
+                    <div class="step-number">2</div>
+                    <div class="step-content">Collecting media assets</div>
+                </div>
+                <div class="step" data-step="3">
+                    <div class="step-number">3</div>
+                    <div class="step-content">Generating audio narration</div>
+                </div>
+                <div class="step" data-step="4">
+                    <div class="step-number">4</div>
+                    <div class="step-content">Processing media assets</div>
+                </div>
+                <div class="step" data-step="5">
+                    <div class="step-number">5</div>
+                    <div class="step-content">Combining audio and video</div>
+                </div>
+                <div class="step" data-step="6">
+                    <div class="step-number">6</div>
+                    <div class="step-content">Uploading to cloud storage</div>
+                </div>
+            </div>
+            <div id="error-message" class="error-message"></div>
+        </div>
+        
+        <video id="video-preview" controls style="display: none;">
+            Your browser does not support the video tag.
+        </video>
+    </div>
+
+    <script>
+        let jobId = null;
+        let pollInterval = null;
+
+        function updateSteps(step, message, completed = false, failed = false) {
+            document.querySelectorAll('.step').forEach(stepEl => {
+                const stepNum = parseInt(stepEl.dataset.step);
+                stepEl.classList.remove('active', 'completed', 'failed');
+                
+                if (failed && stepNum === step) {
+                    stepEl.classList.add('failed');
+                    stepEl.querySelector('.step-content').textContent = message;
+                } else if (stepNum < step || (completed && stepNum === step)) {
+                    stepEl.classList.add('completed');
+                } else if (stepNum === step) {
+                    stepEl.classList.add('active');
+                    stepEl.querySelector('.step-content').textContent = message;
+                }
+            });
+        }
+
+        async function generateVideo() {
+            const content = document.getElementById('content').value;
+            const style = document.getElementById('style').value;
+            const duration = parseInt(document.getElementById('duration').value);
+            
+            if (!content) {
+                alert('Please enter content for the video');
+                return;
+            }
+            
+            document.getElementById('generate-btn').disabled = true;
+            document.getElementById('status').style.display = 'block';
+            document.getElementById('video-preview').style.display = 'none';
+            document.getElementById('error-message').textContent = '';
+            
+            try {
+                const response = await fetch('/api/video/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        content,
+                        style,
+                        duration,
+                        voice: null
+                    }),
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                jobId = data.data.job_id;
+                pollStatus();
+                
+            } catch (error) {
+                document.getElementById('error-message').textContent = `Error: ${error.message}`;
+                document.getElementById('generate-btn').disabled = false;
+            }
+        }
+
+        async function pollStatus() {
+            if (!jobId) return;
+            
+            try {
+                const response = await fetch(`/api/video/status/${jobId}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                const status = data.data;
+                
+                // Update steps based on current status
+                if (status.step && status.step_message) {
+                    updateSteps(status.step, status.step_message, 
+                              status.status === 'completed',
+                              status.status === 'failed');
+                }
+                
+                if (status.status === 'completed') {
+                    clearInterval(pollInterval);
+                    document.getElementById('generate-btn').disabled = false;
+                    
+                    // Show video preview
+                    const videoElement = document.getElementById('video-preview');
+                    videoElement.src = status.video_url;
+                    videoElement.style.display = 'block';
+                    
+                } else if (status.status === 'failed') {
+                    clearInterval(pollInterval);
+                    document.getElementById('generate-btn').disabled = false;
+                    document.getElementById('error-message').textContent = status.error || 'Video generation failed';
+                } else {
+                    // Continue polling
+                    if (!pollInterval) {
+                        pollInterval = setInterval(pollStatus, 2000);
+                    }
+                }
+                
+            } catch (error) {
+                clearInterval(pollInterval);
+                document.getElementById('error-message').textContent = `Error: ${error.message}`;
+                document.getElementById('generate-btn').disabled = false;
+            }
+        }
+    </script>
+</body>
+</html> 

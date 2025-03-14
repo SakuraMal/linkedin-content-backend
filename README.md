@@ -1,5 +1,8 @@
 # LinkedIn Content Generator - Backend API
 
+## Overview
+This is the backend service for the LinkedIn Content Generator, handling post generation and video creation. For detailed architecture information, please refer to [CURRENT_ARCHITECTURE.md](CURRENT_ARCHITECTURE.md).
+
 The Flask backend service for generating LinkedIn posts and videos using AI.
 
 ## Architecture
@@ -193,3 +196,41 @@ pytest --cov=app
 ## License
 
 This project is proprietary. See LICENSE file for details.
+
+## Documentation
+- [Current Architecture](CURRENT_ARCHITECTURE.md) - Main architecture documentation
+- [CORS Configuration](./docs/CORS.md) - Details about CORS setup and troubleshooting
+- Historical Documentation (Archived):
+  - `VIDEO_ARCHITECTURE.md.archived`
+  - `IMPLEMENTATION.md.archived`
+
+## Environment Variables
+
+The following environment variables are required for the application to function:
+
+### Service Configuration
+- `PORT`: Server port (default: 8080)
+- `ENVIRONMENT`: Application environment (development/production)
+- `VERSION`: Application version
+- `FLASK_ENV`: Flask environment (development/production)
+
+### AI Services
+- `OPENAI_API_KEY`: OpenAI API key for content generation
+
+### Media Services
+- `UNSPLASH_ACCESS_KEY`: Unsplash API key for image fetching
+- `PEXELS_API_KEY`: Pexels API key for video content
+
+### Storage Configuration
+- `GOOGLE_CLOUD_PROJECT`: Google Cloud project ID
+- `GOOGLE_CLOUD_STORAGE_BUCKET`: Google Cloud Storage bucket for video storage
+- `GOOGLE_APPLICATION_CREDENTIALS`: Path to Google Cloud credentials file (local) or base64 encoded credentials (production)
+
+### Redis Configuration
+- `REDIS_URL`: Redis connection URL (local or Upstash)
+
+### CORS Configuration
+- `CORS_ORIGINS`: Comma-separated list of allowed origins
+- `FRONTEND_URL`: Frontend application URL
+
+See `.env.example` for a complete template of all required environment variables.

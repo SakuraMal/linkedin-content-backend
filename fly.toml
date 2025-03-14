@@ -7,11 +7,15 @@ app = "linkedin-content-backend"
 primary_region = "mad"
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = "Dockerfile.python"
 
 [env]
   PORT = "8080"
   PYTHONUNBUFFERED = "1"
+  FLASK_APP = "wsgi.py"
+  FLASK_ENV = "production"
+  ENVIRONMENT = "production"
+  CORS_ORIGINS = "http://localhost:3000,https://linkedin-content-frontend.vercel.app"
 
 [http_service]
   internal_port = 8080
@@ -31,7 +35,7 @@ primary_region = "mad"
     timeout = "5s"
     grace_period = "30s"
     method = "GET"
-    path = "/health/live"
+    path = "/health"
     protocol = "http"
     tls_skip_verify = true
 

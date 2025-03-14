@@ -139,6 +139,181 @@ Error 500:
 }
 ```
 
+## Video Generation Architecture
+
+### Overview
+The video generation service is designed to create short (up to 10-second) videos by combining images and audio, using a serverless architecture with free-tier cloud services.
+
+### Services Architecture
+
+#### 1. Compute (Fly.io Free Tier)
+- 3x shared-CPU VMs (256MB RAM each)
+- Used for:
+  - Video generation processing
+  - API endpoints
+  - Job orchestration
+- Free Limits:
+  - 3GB persistent storage
+  - 100GB bandwidth (NA/EU)
+
+#### 2. Status Management (Upstash Redis Free Tier)
+- Used for:
+  - Job status tracking
+  - Progress updates
+  - Temporary job data
+- Free Limits:
+  - 256MB storage
+  - 500K commands/month
+  - Auto-cleanup after 24h
+
+#### 3. Final Storage (Google Cloud Storage)
+- Used for:
+  - Storing completed videos
+  - Public video access
+- Free Limits:
+  - 5GB storage
+  - 1GB network egress/month
+
+### Updated Project Structure
+```
+app/
+├── routes/
+│   ├── post.py           # Existing post endpoints
+│   └── video.py          # Video generation endpoints
+├── services/
+│   ├── openai.py         # Existing OpenAI service
+│   ├── video/
+│   │   ├── generator.py  # Video creation service
+│   │   ├── storage.py    # GCS integration
+│   │   └── status.py     # Redis status management
+│   └── media/
+│       ├── fetcher.py    # Media download service
+│       └── processor.py  # Media processing service
+└── utils/
+    ├── auth.py           # Existing auth utilities
+    ├── validation.py     # Request validation
+    └── cleanup.py        # Temp file cleanup
+```
+
+### Process Flow
+1. Client Request
+   - Validates request
+   - Creates job in Redis
+   - Returns job ID
+2. Background Processing
+   - Downloads media (temp storage)
+   - Processes media
+   - Creates video
+   - Updates Redis status
+3. Upload & Cleanup
+   - Uploads to Google Cloud
+   - Deletes temp files
+   - Updates final status
+
+### Video Generation API Endpoints
+
+#### 1. Generate Video
+```http
+POST /api/video/generate
+Content-Type: application/json
+
+{
+  "media": [
+    {
+      "type": "image",
+      "url": "string",
+      "duration": number  // seconds
+    }
+  ],
+  "audio": {
+    "url": "string"
+  },
+  "style": "professional" | "casual" | "dynamic"
+}
+
+Response 202:
+{
+  "status": "success",
+  "data": {
+    "job_id": "string",
+    "estimated_duration": number
+  }
+}
+```
+
+#### 2. Check Status
+```http
+GET /api/video/status/{job_id}
+
+Response 200:
+{
+  "status": "success",
+  "data": {
+    "status": "queued" | "processing" | "completed" | "error",
+    "progress": number,  // 0-100
+    "video_url": "string"  // when completed
+  }
+}
+```
+
+### Storage Strategy
+
+#### Temporary Storage (Fly.io VM)
+- Location: `/tmp/video-jobs/{job_id}/`
+- Contents:
+  - Downloaded media files
+  - Processing artifacts
+  - Temporary video files
+- Cleanup: Automatic after job completion
+
+#### Redis Storage (Upstash)
+- Key format: `video_job:{job_id}`
+- TTL: 24 hours
+- Stored data:
+  - Job status
+  - Progress
+  - Error messages
+  - Processing metadata
+
+#### Permanent Storage (Google Cloud)
+- Bucket: `paa-some-videos`
+- Path format: `videos/{job_id}/{timestamp}.mp4`
+- Public URL format: `https://storage.googleapis.com/paa-some-videos/videos/{job_id}/{timestamp}.mp4`
+
+### Free Tier Optimization
+
+#### Storage Optimization
+1. Immediate cleanup of temp files
+2. Video compression to reduce size
+3. Redis TTL for automatic cleanup
+
+#### Compute Optimization
+1. Process one video at a time
+2. Queue system for multiple requests
+3. Resource monitoring
+
+#### Bandwidth Optimization
+1. Compress media before processing
+2. Optimize video output size
+3. Cache frequently accessed videos
+
+### Additional Environment Variables
+```env
+# Video Service Configuration
+VIDEO_TEMP_DIR=/tmp/video-jobs
+MAX_VIDEO_DURATION=10
+MAX_MEDIA_SIZE_MB=10
+CLEANUP_INTERVAL_SEC=300
+
+# Redis Configuration
+REDIS_URL=your_upstash_url
+REDIS_TTL_HOURS=24
+
+# Google Cloud Storage (existing)
+GCS_BUCKET=paa-some-videos
+GCS_VIDEO_PATH=videos
+```
+
 ## Progress Tracking
 
 ### Current Status

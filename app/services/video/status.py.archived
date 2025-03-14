@@ -1,0 +1,176 @@
+import os
+import json
+from datetime import datetime
+import redis
+from urllib.parse import urlparse
+import logging
+from typing import Optional, Dict, Any
+import asyncio
+from functools import wraps, partial
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+def to_async(func):
+    @wraps(func)
+    async def run(*args, loop=None, executor=None, **kwargs):
+        if loop is None:
+            loop = asyncio.get_event_loop()
+        pfunc = partial(func, *args, **kwargs)
+        return await loop.run_in_executor(executor, pfunc)
+    return run
+
+class RedisService:
+    def __init__(self):
+        """Initialize Redis connection using environment variables."""
+        redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+        parsed_url = urlparse(redis_url)
+        
+        # Log Redis connection (with masked password)
+        masked_url = redis_url.replace(parsed_url.password or '', '***') if parsed_url.password else redis_url
+        logger.debug(f"Initializing Redis connection with URL: {masked_url}")
+        
+        try:
+            # Configure Redis connection with proper SSL settings
+            ssl_kwargs = {}
+            if parsed_url.scheme == 'rediss':
+                ssl_kwargs = {
+                    'ssl': True,
+                    'ssl_cert_reqs': None,  # Don't verify SSL certificate
+                    'ssl_ca_certs': None
+                }
+            
+            self.redis = redis.Redis(
+                host=parsed_url.hostname or 'localhost',
+                port=parsed_url.port or 6379,
+                password=parsed_url.password,
+                decode_responses=True,
+                socket_timeout=5.0,  # Add timeout
+                socket_connect_timeout=5.0,  # Add connection timeout
+                retry_on_timeout=True,  # Retry on timeout
+                **ssl_kwargs
+            )
+            # Test connection
+            logger.info("Testing Redis connection...")
+            self.redis.ping()
+            logger.info("Redis connection established successfully")
+        except redis.ConnectionError as e:
+            logger.error(f"Failed to connect to Redis: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error connecting to Redis: {str(e)}")
+            raise
+
+        # Get TTL from environment or default to 24 hours
+        self.ttl = int(os.getenv('REDIS_TTL_HOURS', 24)) * 3600
+
+    def _serialize_data(self, data: Dict[str, Any]) -> str:
+        """Serialize data to JSON string, handling Pydantic models."""
+        def serialize(obj):
+            if hasattr(obj, 'model_dump'):
+                return obj.model_dump()
+            if hasattr(obj, '__str__'):
+                return str(obj)
+            return obj
+        
+        return json.dumps(data, default=serialize)
+
+    async def create_job(self, job_id: str, initial_data: Dict[str, Any]) -> bool:
+        """Create a new video generation job in Redis."""
+        try:
+            # Convert Pydantic models to dict if needed
+            if hasattr(initial_data, 'model_dump'):
+                initial_data = initial_data.model_dump()
+            
+            job_data = {
+                **initial_data,
+                'status': 'queued',
+                'progress': 0,
+                'created_at': datetime.now().isoformat(),
+                'updated_at': datetime.now().isoformat(),
+                'error': None
+            }
+            
+            # Store job data with TTL
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None,
+                partial(
+                    self.redis.setex,
+                    f'video_job:{job_id}',
+                    self.ttl,
+                    self._serialize_data(job_data)
+                )
+            )
+        except Exception as e:
+            logger.error(f"Error creating job {job_id}: {e}")
+            return False
+
+    async def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Get the status of a video generation job."""
+        try:
+            loop = asyncio.get_event_loop()
+            job_data = await loop.run_in_executor(
+                None,
+                partial(self.redis.get, f'video_job:{job_id}')
+            )
+            if not job_data:
+                logger.debug(f"No data found for job {job_id}")
+                return None
+            return json.loads(job_data)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding job data for {job_id}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error getting job status for {job_id}: {e}")
+            return None
+
+    async def update_job_status(self, job_id: str, status: str, progress: Optional[int] = None, error: Optional[str] = None) -> bool:
+        """Update the status of a video generation job."""
+        try:
+            job_data = await self.get_job_status(job_id)
+            if not job_data:
+                logger.error(f"Cannot update non-existent job {job_id}")
+                return False
+
+            # Update job data
+            job_data.update({
+                'status': status,
+                'updated_at': datetime.now().isoformat()
+            })
+            
+            if progress is not None:
+                job_data['progress'] = progress
+            
+            if error is not None:
+                job_data['error'] = error
+
+            # Store updated data with renewed TTL
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None,
+                partial(
+                    self.redis.setex,
+                    f'video_job:{job_id}',
+                    self.ttl,
+                    self._serialize_data(job_data)
+                )
+            )
+        except Exception as e:
+            logger.error(f"Error updating job {job_id}: {e}")
+            return False
+
+    async def delete_job(self, job_id: str) -> bool:
+        """Delete a video generation job from Redis."""
+        try:
+            loop = asyncio.get_event_loop()
+            return bool(await loop.run_in_executor(
+                None,
+                partial(self.redis.delete, f'video_job:{job_id}')
+            ))
+        except Exception as e:
+            logger.error(f"Error deleting job {job_id}: {e}")
+            return False
+
+# Create a singleton instance
+redis_service = RedisService() 

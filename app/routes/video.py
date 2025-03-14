@@ -1,189 +1,95 @@
-from flask import Blueprint, jsonify, request
-import os
-from datetime import datetime
-from typing import Optional
+from flask import Blueprint, request, jsonify, current_app
+from app.services.video.generator import VideoGenerator
+from app.models.video import VideoRequest
 import uuid
-import json
-import redis
-from urllib.parse import urlparse
 import logging
+import json
+from datetime import datetime, timedelta
 
-video_routes = Blueprint('video', __name__)
+bp = Blueprint('video', __name__)
+video_generator = VideoGenerator()
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
-
-# Initialize Redis client
-redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
-parsed_url = urlparse(redis_url)
-logger.debug(f"Redis URL (masked password): {redis_url.replace(parsed_url.password or '', '***')}")
-
-redis_client = redis.Redis(
-    host=parsed_url.hostname or 'localhost',
-    port=parsed_url.port or 6379,
-    password=parsed_url.password,
-    ssl=parsed_url.scheme == 'rediss',
-    decode_responses=True
-)
-
-def validate_video_request(data: dict) -> tuple[bool, Optional[str]]:
-    """Validate the video generation request data."""
-    required_fields = ['content', 'style', 'duration']
-    
-    # Check required fields
-    for field in required_fields:
-        if field not in data:
-            return False, f"Missing required field: {field}"
-    
-    # Validate style
-    valid_styles = ['professional', 'casual', 'dynamic']
-    if data['style'] not in valid_styles:
-        return False, f"Invalid style. Must be one of: {', '.join(valid_styles)}"
-    
-    # Validate duration
+@bp.route('/test-setup', methods=['GET'])
+def test_setup():
+    """Test endpoint to verify Redis connection."""
     try:
-        duration = int(data['duration'])
-        if not (10 <= duration <= 300):
-            return False, "Duration must be between 10 and 300 seconds"
-    except (ValueError, TypeError):
-        return False, "Duration must be a number"
-    
-    return True, None
+        test_key = str(uuid.uuid4())
+        current_app.redis_client.set(
+            f"job:{test_key}:status",
+            json.dumps({"status": "test", "timestamp": datetime.utcnow().isoformat()})
+        )
+        current_app.redis_client.delete(f"job:{test_key}:status")
+        return jsonify({"status": "success", "message": "Redis connection successful"}), 200
+    except Exception as e:
+        logging.error(f"Error in test setup: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-@video_routes.route('/test-setup', methods=['GET'])
-def test_video_setup():
-    """Test endpoint to verify video generation setup."""
-    try:
-        # Test Redis connection
-        redis_client.ping()
-        redis_status = "connected"
-    except redis.ConnectionError:
-        redis_status = "disconnected"
-
-    return jsonify({
-        'status': 'ok',
-        'timestamp': datetime.now().isoformat(),
-        'service': 'video-generation',
-        'environment': os.getenv('FLASK_ENV', 'development'),
-        'redis_status': redis_status
-    })
-
-@video_routes.route('/generate', methods=['POST'])
+@bp.route('/generate', methods=['POST'])
 def generate_video():
-    """Generate a video based on the provided content and parameters."""
-    data = request.get_json()
-    
-    # Validate request
-    is_valid, error_message = validate_video_request(data)
-    if not is_valid:
-        return jsonify({
-            'status': 'error',
-            'message': error_message
-        }), 400
-    
-    # Generate a unique ID for this video generation request
-    generation_id = str(uuid.uuid4())
-    
-    # Store job information in Redis
-    job_data = {
-        'content': data['content'],
-        'style': data['style'],
-        'duration': data['duration'],
-        'status': 'queued',
-        'progress': 0,
-        'created_at': datetime.now().isoformat(),
-        'updated_at': datetime.now().isoformat(),
-        'error': None
-    }
-    
-    # Store in Redis with 24-hour expiration
-    redis_client.setex(
-        f'video_job:{generation_id}',
-        86400,  # 24 hours in seconds
-        json.dumps(job_data)
-    )
-    
-    return jsonify({
-        'status': 'success',
-        'message': 'Video generation initiated',
-        'data': {
-            'generation_id': generation_id,
-            'estimated_duration': data['duration'],
-            'status': 'queued',
-            'content_preview': data['content'][:100] + '...' if len(data['content']) > 100 else data['content'],
-            'style': data['style'],
-            'created_at': job_data['created_at']
-        }
-    }), 202
-
-@video_routes.route('/status/<generation_id>', methods=['GET'])
-def get_video_status(generation_id):
-    """Get the status of a video generation job."""
-    logger.debug(f"Fetching status for job {generation_id}")
-    
-    # Get job data from Redis
+    """Generate a video based on the provided content description."""
     try:
-        job_data = redis_client.get(f'video_job:{generation_id}')
-        logger.debug(f"Raw Redis data: {job_data}")
+        data = request.get_json()
+        video_request = VideoRequest(**data)
+        job_id = str(uuid.uuid4())
         
-        if not job_data:
-            logger.debug("Job data not found in Redis")
-            return jsonify({
-                'status': 'error',
-                'message': 'Video generation job not found'
-            }), 404
+        # Log the request
+        logging.info(f"Received video generation request: {video_request.model_dump()}")
         
-        job = json.loads(job_data)
-        logger.debug(f"Parsed job data: {job}")
+        # Store initial job status
+        job_data = {
+            "status": "queued",
+            "progress": 0,
+            "request": video_request.model_dump(),
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
         
-        # For demo purposes, simulate progress
-        if job['status'] == 'queued':
-            job['status'] = 'processing'
-            job['progress'] = 10
-        elif job['status'] == 'processing' and job['progress'] < 100:
-            job['progress'] += 20
-            if job['progress'] >= 100:
-                job['status'] = 'completed'
-                job['progress'] = 100
-        
-        job['updated_at'] = datetime.now().isoformat()
-        
-        # Update job in Redis
-        redis_client.setex(
-            f'video_job:{generation_id}',
-            86400,  # 24 hours in seconds
-            json.dumps(job)
+        # Set job data with 24-hour expiration
+        current_app.redis_client.set(
+            f"job:{job_id}:status",
+            json.dumps(job_data),
+            ex=int(timedelta(hours=24).total_seconds())
         )
         
+        # Start video generation process in background
+        video_generator.process_video_job(job_id, video_request, current_app.redis_client)
+        
         return jsonify({
-            'status': 'success',
-            'data': {
-                'generation_id': generation_id,
-                'status': job['status'],
-                'progress': job['progress'],
-                'style': job['style'],
-                'created_at': job['created_at'],
-                'updated_at': job['updated_at'],
-                'error': job['error']
+            "status": "success",
+            "data": {
+                "job_id": job_id,
+                "status": "queued",
+                "estimated_duration": video_request.duration
             }
-        })
-    except redis.RedisError as e:
-        logger.error(f"Redis error: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': 'Error accessing job data'
-        }), 500
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON decode error: {e}")
-        logger.error(f"Raw data that failed to parse: {job_data}")
-        return jsonify({
-            'status': 'error',
-            'message': 'Error parsing job data'
-        }), 500
+        }), 202
+        
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logging.error(f"Error in video generation: {str(e)}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+@bp.route('/status/<job_id>', methods=['GET'])
+def get_video_status(job_id: str):
+    """Get the status of a video generation job."""
+    try:
+        job_data = current_app.redis_client.get(f"job:{job_id}:status")
+        if not job_data:
+            return jsonify({"status": "error", "message": "Job not found"}), 404
+            
+        job_info = json.loads(job_data)
         return jsonify({
-            'status': 'error',
-            'message': 'Internal server error'
-        }), 500 
+            "status": "success",
+            "data": {
+                "status": job_info["status"],
+                "progress": job_info.get("progress", 0),
+                "video_url": job_info.get("video_url"),
+                "created_at": job_info["created_at"],
+                "updated_at": job_info["updated_at"],
+                "error": job_info.get("error")
+            }
+        }), 200
+        
+    except Exception as e:
+        logging.error(f"Error getting job status: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500 

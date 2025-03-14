@@ -1,0 +1,180 @@
+# Video Generation Service Architecture
+
+## System Overview
+The video generation service is a microservice-based system deployed on Fly.io that creates dynamic videos from text content. It integrates with multiple external services and uses a distributed architecture for reliable video processing.
+
+## Core Components
+
+### 1. API Layer (`app/routes/video.py`)
+- Handles HTTP requests for video generation
+- Implements REST endpoints:
+  - `POST /api/video/generate`: Initiates video generation
+  - `GET /api/video/status/{job_id}`: Checks generation status
+  - `GET /api/video/test-setup`: Verifies service configuration
+
+### 2. Service Layer (`app/services/video/`)
+- **Generator Service** (`generator.py`)
+  - Orchestrates the video generation process
+  - Manages job status updates
+  - Handles error recovery and retries
+
+- **Storage Service** (`storage.py`)
+  - Manages Google Cloud Storage operations
+  - Handles video file uploads
+  - Generates public URLs for videos
+
+- **Status Service** (`status.py`)
+  - Manages Redis-based job tracking
+  - Handles progress updates
+  - Maintains job state and metadata
+
+### 3. Media Services (`app/services/media/`)
+- **Media Fetcher** (`fetcher.py`)
+  - Integrates with Unsplash API for images
+  - Downloads and processes media assets
+
+- **Media Processor** (`processor.py`)
+  - Creates video segments from images
+  - Handles video composition
+  - Manages transitions and effects
+
+- **Audio Generator** (`audio.py`)
+  - Integrates with Edge TTS
+  - Generates voiceovers from text
+
+## External Services Integration
+
+### 1. Redis (Upstash)
+- **Purpose**: Job status and progress tracking
+- **Configuration**:
+  ```env
+  REDIS_URL=rediss://default:${REDIS_PASSWORD}@fly-linkedin-content-redis.upstash.io:6379
+  ```
+- **Features**:
+  - SSL/TLS encryption
+  - Persistent storage
+  - Low-latency access
+
+### 2. Google Cloud Storage
+- **Purpose**: Video file storage and distribution
+- **Configuration**:
+  ```env
+  GOOGLE_CLOUD_PROJECT=paa-some
+  GOOGLE_CLOUD_STORAGE_BUCKET=paa-some-videos
+  ```
+- **Features**:
+  - Public URL generation
+  - Secure credential management
+  - CDN integration
+
+### 3. Unsplash API
+- **Purpose**: High-quality image sourcing
+- **Configuration**:
+  ```env
+  UNSPLASH_ACCESS_KEY=your_access_key
+  ```
+- **Features**:
+  - Image search and filtering
+  - Attribution handling
+  - Rate limit management
+
+### 4. Edge TTS
+- **Purpose**: Text-to-speech conversion
+- **Features**:
+  - Natural voice synthesis
+  - Multiple voice options
+  - Language support
+
+## Deployment Architecture
+
+### 1. Fly.io Configuration
+- **Runtime**: Python 3.9+
+- **Resources**:
+  - CPU: 1x shared
+  - Memory: 512MB
+  - Storage: 1GB
+
+### 2. Scaling and Performance
+- Automatic horizontal scaling
+- Regional deployment
+- Load balancing
+
+### 3. Security
+- SSL/TLS encryption
+- Secure credential management
+- CORS configuration
+
+## Data Flow
+
+1. **Request Handling**:
+   ```
+   Client -> API Endpoint -> Job Creation -> Redis Status Update
+   ```
+
+2. **Video Generation**:
+   ```
+   Job Processing -> Media Fetching -> Audio Generation -> 
+   Video Creation -> GCS Upload -> Final Status Update
+   ```
+
+3. **Status Updates**:
+   ```
+   Client -> Status Endpoint -> Redis Query -> Response
+   ```
+
+## Error Handling
+
+1. **Retry Mechanisms**:
+   - Media download retries
+   - GCS upload retries
+   - Redis operation retries
+
+2. **Error States**:
+   - `failed`: Generation error
+   - `error`: System error
+   - Detailed error messages in status
+
+## Monitoring and Logging
+
+1. **Application Logs**:
+   - Request/response logging
+   - Error tracking
+   - Performance metrics
+
+2. **Service Health**:
+   - Redis connection status
+   - GCS connectivity
+   - API rate limits
+
+## Environment Configuration
+```env
+# Service Configuration
+PORT=8000
+ENVIRONMENT=production
+VERSION=1.0.0
+
+# External Services
+REDIS_URL=rediss://default:${REDIS_PASSWORD}@fly-linkedin-content-redis.upstash.io:6379
+GOOGLE_CLOUD_STORAGE_BUCKET=paa-some-videos
+UNSPLASH_ACCESS_KEY=your_access_key
+
+# CORS Configuration
+CORS_ORIGINS=http://localhost:3000,https://linkedin-content-frontend.vercel.app
+```
+
+## Future Improvements
+
+1. **Performance**:
+   - Implement job queuing system
+   - Add caching layer
+   - Optimize media processing
+
+2. **Features**:
+   - Additional video styles
+   - Custom transitions
+   - Background music
+
+3. **Monitoring**:
+   - Add metrics collection
+   - Set up alerting
+   - Implement tracing 
