@@ -5,7 +5,7 @@ Werkzeug>=3.0.0
 google-cloud-storage>=2.14.0
 google-cloud-secret-manager>=2.16.4
 moviepy==1.0.3
-Pillow>=10.0.0
+Pillow==9.5.0
 requests==2.31.0
 python-dotenv==1.0.0
 openai>=1.12.0
