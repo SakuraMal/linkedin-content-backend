@@ -77,29 +77,45 @@ class MediaFetcher:
     def extract_keywords(self, content: str, max_keywords: int = 5) -> Dict[str, List[str]]:
         """Extract visually descriptive keywords from content, categorized by type."""
         try:
-            prompt = f"""Analyze this content and extract two types of keywords (maximum {max_keywords} total):
-            1. Static subjects: Objects, scenes, or concepts best shown as still images
-            2. Dynamic subjects: Actions, processes, or scenes that would work better as video clips
+            prompt = f"""Analyze this content and extract highly specific visual search terms, categorized into two types:
+
+            1. Static subjects (for images):
+               - Concrete objects, scenes, or concepts
+               - Include descriptive adjectives (e.g. 'modern office' instead of just 'office')
+               - Consider metaphorical representations of abstract concepts
+               - Include emotional/mood descriptors when relevant
             
-            Return only a JSON object with these fields:
-            - static_keywords: list of keywords for images
-            - dynamic_keywords: list of keywords for videos
+            2. Dynamic subjects (for videos):
+               - Actions, processes, or movements
+               - Include context and setting
+               - Consider human interactions or behaviors
+               - Focus on visual aspects that work well in motion
+            
+            Guidelines:
+            - Be very specific (e.g. 'business team brainstorming' vs just 'team')
+            - Include visual style hints (e.g. 'minimalist', 'vibrant', 'professional')
+            - Consider the content's tone and industry context
+            - Combine concepts for more specific results
+            
+            Return only a JSON object with:
+            - static_keywords: list of detailed image search terms (max {max_keywords//2 + 1})
+            - dynamic_keywords: list of detailed video search terms (max {max_keywords//2})
             
             Content: {content}"""
             
             response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4",  # Using GPT-4 for better understanding and specificity
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=150
+                max_tokens=200
             )
             
             keywords = json.loads(response.choices[0].message.content)
-            logger.info(f"Extracted keywords by type: {keywords}")
+            logger.info(f"Extracted detailed keywords by type: {keywords}")
             return keywords
             
         except Exception as e:
-            logger.error(f"Error extracting keywords: {str(e)}")
+            logger.error(f"Error extracting keywords: {str(e)}\n{traceback.format_exc()}")
             # Fallback to simple content splitting
             words = content.split()[:max_keywords]
             return {
@@ -108,13 +124,15 @@ class MediaFetcher:
             }
 
     def fetch_unsplash_images(self, query: str, count: int = 3) -> List[str]:
-        """Fetch image URLs from Unsplash."""
+        """Fetch image URLs from Unsplash with enhanced search parameters."""
         try:
             headers = {'Authorization': f'Client-ID {self.unsplash_api_key}'}
             params = {
                 'query': query,
-                'per_page': count,
-                'orientation': 'squarish'
+                'per_page': count * 2,  # Fetch more options to filter
+                'orientation': 'squarish',
+                'content_filter': 'high',
+                'order_by': 'relevant'
             }
             
             response = requests.get(
@@ -124,8 +142,16 @@ class MediaFetcher:
             )
             response.raise_for_status()
             
-            urls = [photo['urls']['regular'] for photo in response.json()['results']]
-            logger.info(f"Found {len(urls)} images for query: {query}")
+            # Filter for higher quality images
+            photos = response.json()['results']
+            filtered_photos = sorted(
+                photos,
+                key=lambda x: (x['likes'] + x['downloads'] if 'downloads' in x else 0),
+                reverse=True
+            )[:count]
+            
+            urls = [photo['urls']['regular'] for photo in filtered_photos]
+            logger.info(f"Found {len(urls)} quality images for query: {query}")
             return urls
             
         except Exception as e:
