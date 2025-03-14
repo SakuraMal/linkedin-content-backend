@@ -43,7 +43,14 @@ class MediaFetcher:
                 messages=[
                     {
                         "role": "system",
-                        "content": f"You are a keyword extractor. Extract the {max_keywords} most visually relevant keywords or phrases from the text. Return only the keywords, separated by commas, no explanations."
+                        "content": (
+                            "You are a visual keyword extractor. Your task is to extract keywords that will produce good visual search results. "
+                            f"Extract exactly {max_keywords} visually descriptive keywords or phrases from the text. "
+                            "Focus on concrete objects, scenes, or concepts that would make good photographs. "
+                            "Avoid abstract concepts unless they have clear visual representations. "
+                            "Return only the keywords, separated by commas, no explanations. "
+                            "Example good keywords: 'artificial intelligence laboratory, data scientist working, modern research facility'"
+                        )
                     },
                     {
                         "role": "user",
@@ -56,15 +63,15 @@ class MediaFetcher:
             
             keywords = [k.strip() for k in response.choices[0].message.content.split(',')]
             logger.info(f"Extracted keywords: {keywords}")
-            return keywords
+            return keywords[:max_keywords]  # Ensure we don't exceed max_keywords
             
         except Exception as e:
             logger.error(f"Error extracting keywords: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-            # Return the first few words of content as fallback
-            return [content.split()[:max_keywords][0]]
+            # Return a safe fallback that should produce decent images
+            return ["modern office", "technology", "business professional"]
 
-    def fetch_unsplash_images(self, query: str, count: int = 3) -> List[str]:
+    def fetch_unsplash_images(self, query: str, count: int = 3, retries: int = 2) -> List[str]:
         """Fetch image URLs from Unsplash based on query."""
         try:
             logger.info(f"Fetching {count} images from Unsplash for query: {query}")
@@ -74,30 +81,48 @@ class MediaFetcher:
                 logger.error(error_msg)
                 raise Exception(error_msg)
             
+            # Try to get more images than needed to have some buffer
+            buffer_count = min(30, count * 2)  # Don't request too many
+            
             url = f"https://api.unsplash.com/photos/random"
             headers = {"Authorization": f"Client-ID {self.unsplash_api_key}"}
             params = {
                 "query": query,
-                "count": count,
-                "orientation": "landscape"
+                "count": buffer_count,
+                "orientation": "landscape",
+                "content_filter": "high"
             }
             
             logger.debug(f"Making request to Unsplash API: {url}")
             logger.debug(f"Request params: {json.dumps(params, indent=2)}")
             
-            response = requests.get(url, headers=headers, params=params)
-            logger.info(f"Unsplash API response status: {response.status_code}")
+            urls = []
+            attempts = 0
             
-            if response.status_code != 200:
-                logger.error(f"Unsplash API error response: {response.text}")
-                response.raise_for_status()
+            while len(urls) < count and attempts < retries:
+                try:
+                    response = requests.get(url, headers=headers, params=params)
+                    logger.info(f"Unsplash API response status: {response.status_code}")
+                    
+                    if response.status_code != 200:
+                        logger.error(f"Unsplash API error response: {response.text}")
+                        response.raise_for_status()
+                    
+                    photos = response.json()
+                    logger.debug(f"Unsplash API response: {json.dumps(photos, indent=2)}")
+                    
+                    new_urls = [photo["urls"]["regular"] for photo in photos]
+                    urls.extend(new_urls)
+                    
+                except Exception as e:
+                    logger.error(f"Error on attempt {attempts + 1}: {str(e)}")
+                    attempts += 1
+                    continue
             
-            photos = response.json()
-            logger.debug(f"Unsplash API response: {json.dumps(photos, indent=2)}")
-            
-            urls = [photo["urls"]["regular"] for photo in photos]
-            logger.info(f"Successfully fetched {len(urls)} image URLs: {urls}")
-            return urls
+            # Ensure we have unique URLs
+            urls = list(dict.fromkeys(urls))
+            logger.info(f"Successfully fetched {len(urls)} unique image URLs")
+            return urls[:count]  # Return only the number of images requested
             
         except Exception as e:
             logger.error(f"Error fetching Unsplash images: {str(e)}")
@@ -164,31 +189,62 @@ class MediaFetcher:
         try:
             logger.info(f"Starting media fetching for content: {content}")
             
-            # Calculate number of images based on duration (1 image per 2 seconds)
-            num_images = max(5, round(duration / 2))
-            logger.info(f"Calculated number of images needed: {num_images}")
+            # Calculate number of images needed with both minimum and maximum limits
+            MIN_IMAGES = 5
+            MAX_IMAGES = 10  # Maximum number of images to prevent excessive fetching
+            calculated_images = round(duration / 2)
+            num_images = max(MIN_IMAGES, min(MAX_IMAGES, calculated_images))
+            logger.info(f"Calculated number of images needed: {num_images} (duration: {duration}s, calculated: {calculated_images})")
             
             # Extract keywords for better image search
-            keywords = self.extract_keywords(content)
+            keywords = self.extract_keywords(content, max_keywords=3)
             if not keywords:
-                logger.warning("No keywords extracted, using full content")
-                keywords = [content]
+                logger.warning("No keywords extracted, using fallback keywords")
+                keywords = ["modern office", "technology", "business professional"]
             
-            # Fetch images for each keyword
+            # Fetch a minimum number of images per keyword
             all_image_urls = []
             images_per_keyword = max(2, round(num_images / len(keywords)))
             
+            # Try each keyword
             for keyword in keywords:
                 image_urls = self.fetch_unsplash_images(keyword, count=images_per_keyword)
                 all_image_urls.extend(image_urls)
-            
-            # Ensure we have enough images
-            while len(all_image_urls) < num_images and keywords:
-                # Try to fetch more images with the first keyword
-                more_urls = self.fetch_unsplash_images(keywords[0], count=num_images - len(all_image_urls))
-                all_image_urls.extend(more_urls)
-                if not more_urls:
+                logger.info(f"Fetched {len(image_urls)} images for keyword '{keyword}'")
+                
+                # Break early if we have enough images
+                if len(all_image_urls) >= num_images:
                     break
+            
+            # If we still don't have enough images, try combinations of keywords
+            if len(all_image_urls) < num_images and len(keywords) >= 2:
+                for i in range(len(keywords) - 1):
+                    if len(all_image_urls) >= num_images:
+                        break
+                    combined_query = f"{keywords[i]} {keywords[i + 1]}"
+                    remaining_needed = num_images - len(all_image_urls)
+                    if remaining_needed > 0:
+                        more_urls = self.fetch_unsplash_images(combined_query, count=remaining_needed)
+                        all_image_urls.extend(more_urls)
+                        logger.info(f"Fetched {len(more_urls)} additional images for combined query '{combined_query}'")
+            
+            # Final fallback: use generic business/tech images if we still don't have enough
+            if len(all_image_urls) < num_images:
+                fallback_queries = ["modern business", "technology workspace", "professional office"]
+                for query in fallback_queries:
+                    if len(all_image_urls) >= num_images:
+                        break
+                    remaining_needed = num_images - len(all_image_urls)
+                    if remaining_needed > 0:
+                        more_urls = self.fetch_unsplash_images(query, count=remaining_needed)
+                        all_image_urls.extend(more_urls)
+                        logger.info(f"Fetched {len(more_urls)} fallback images for query '{query}'")
+            
+            # Ensure we have unique URLs and limit to the number we need
+            all_image_urls = list(dict.fromkeys(all_image_urls))[:num_images]
+            
+            if len(all_image_urls) < MIN_IMAGES:
+                logger.warning(f"Could only fetch {len(all_image_urls)} unique images out of minimum {MIN_IMAGES} required")
             
             if not all_image_urls:
                 error_msg = f"No images found for content: {content}"
@@ -197,7 +253,7 @@ class MediaFetcher:
             
             # Download all images
             image_paths = []
-            for url in all_image_urls[:num_images]:  # Limit to required number of images
+            for url in all_image_urls:  # Already limited to num_images above
                 image_path = self.download_file(url, prefix='img_')
                 if image_path:
                     image_paths.append(image_path)
