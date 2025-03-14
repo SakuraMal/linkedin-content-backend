@@ -1,12 +1,13 @@
 import os
 import requests
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 from urllib.parse import urlparse
 import tempfile
 import traceback
 import json
 import openai
+from .pexels_fetcher import pexels_fetcher
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
@@ -14,305 +15,225 @@ logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
 class MediaFetcher:
     def __init__(self):
         """Initialize the MediaFetcher service."""
-        self.temp_dir = tempfile.mkdtemp(prefix='video_gen_')
-        self.unsplash_api_key = os.getenv('UNSPLASH_ACCESS_KEY')
-        self._openai_client = None
+        self.temp_dir = tempfile.mkdtemp(prefix='media_')
+        self.unsplash_api_key = os.getenv('UNSPLASH_API_KEY')
         if not self.unsplash_api_key:
-            logger.error("UNSPLASH_ACCESS_KEY not set. Unsplash image fetching will not work.")
-        else:
-            logger.info(f"Initialized MediaFetcher with Unsplash API key: {self.unsplash_api_key[:5]}...")
-        logger.info(f"Initialized MediaFetcher with temp directory: {self.temp_dir}")
+            logger.error("UNSPLASH_API_KEY not found in environment variables")
+            
+        logger.info("Initialized MediaFetcher")
 
     @property
     def openai_client(self):
         """Lazy initialization of OpenAI client."""
-        if self._openai_client is None:
+        if not hasattr(self, '_openai_client'):
             api_key = os.getenv('OPENAI_API_KEY')
             if not api_key:
-                raise ValueError("OPENAI_API_KEY environment variable is not set")
+                logger.error("OPENAI_API_KEY not found in environment variables")
+                raise ValueError("OPENAI_API_KEY environment variable is required")
+            
             self._openai_client = openai.OpenAI(api_key=api_key)
         return self._openai_client
 
-    def extract_keywords(self, content: str, max_keywords: int = 3) -> List[str]:
-        """Extract relevant keywords from content for image search."""
+    def analyze_content_type(self, content: str) -> Dict[str, float]:
+        """
+        Analyze content to determine optimal media distribution.
+        Returns ratio recommendations for images vs videos.
+        """
         try:
-            logger.info(f"Extracting keywords from content: {content}")
+            prompt = f"""Analyze this content and determine the optimal ratio of static images vs video clips.
+            Consider factors like:
+            - Action and movement descriptions
+            - Process or sequential explanations
+            - Static concepts or descriptions
+            - Technical vs visual content
+            
+            Return only a JSON object with these fields:
+            - image_ratio: float between 0.4 and 0.8
+            - video_ratio: float between 0.2 and 0.6
+            - reasoning: brief explanation
+            
+            Content: {content}"""
             
             response = self.openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a visual keyword extractor. Your task is to extract keywords that will produce good visual search results. "
-                            f"Extract exactly {max_keywords} visually descriptive keywords or phrases from the text. "
-                            "Focus on concrete objects, scenes, or concepts that would make good photographs. "
-                            "Avoid abstract concepts unless they have clear visual representations. "
-                            "Return only the keywords, separated by commas, no explanations. "
-                            "Example good keywords: 'artificial intelligence laboratory, data scientist working, modern research facility'"
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": content
-                    }
-                ],
-                temperature=0.3,
-                max_tokens=50
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=150
             )
             
-            keywords = [k.strip() for k in response.choices[0].message.content.split(',')]
-            logger.info(f"Extracted keywords: {keywords}")
-            return keywords[:max_keywords]  # Ensure we don't exceed max_keywords
+            result = json.loads(response.choices[0].message.content)
+            logger.info(f"Content analysis result: {result}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error analyzing content type: {str(e)}")
+            # Default to 70/30 split if analysis fails
+            return {
+                "image_ratio": 0.7,
+                "video_ratio": 0.3,
+                "reasoning": "Using default ratio due to analysis error"
+            }
+
+    def extract_keywords(self, content: str, max_keywords: int = 5) -> Dict[str, List[str]]:
+        """Extract visually descriptive keywords from content, categorized by type."""
+        try:
+            prompt = f"""Analyze this content and extract two types of keywords (maximum {max_keywords} total):
+            1. Static subjects: Objects, scenes, or concepts best shown as still images
+            2. Dynamic subjects: Actions, processes, or scenes that would work better as video clips
+            
+            Return only a JSON object with these fields:
+            - static_keywords: list of keywords for images
+            - dynamic_keywords: list of keywords for videos
+            
+            Content: {content}"""
+            
+            response = self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=150
+            )
+            
+            keywords = json.loads(response.choices[0].message.content)
+            logger.info(f"Extracted keywords by type: {keywords}")
+            return keywords
             
         except Exception as e:
             logger.error(f"Error extracting keywords: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            # Return a safe fallback that should produce decent images
-            return ["modern office", "technology", "business professional"]
+            # Fallback to simple content splitting
+            words = content.split()[:max_keywords]
+            return {
+                "static_keywords": words[:3],
+                "dynamic_keywords": words[3:5]
+            }
 
-    def fetch_unsplash_images(self, query: str, count: int = 3, retries: int = 2) -> List[str]:
-        """Fetch image URLs from Unsplash based on query."""
+    def fetch_unsplash_images(self, query: str, count: int = 3) -> List[str]:
+        """Fetch image URLs from Unsplash."""
         try:
-            logger.info(f"Fetching {count} images from Unsplash for query: {query}")
-            
-            if not self.unsplash_api_key:
-                error_msg = "Unsplash API key is not set"
-                logger.error(error_msg)
-                raise Exception(error_msg)
-            
-            # Try to get more images than needed to have some buffer
-            buffer_count = min(30, count * 2)  # Don't request too many
-            
-            url = f"https://api.unsplash.com/photos/random"
-            headers = {"Authorization": f"Client-ID {self.unsplash_api_key}"}
+            headers = {'Authorization': f'Client-ID {self.unsplash_api_key}'}
             params = {
-                "query": query,
-                "count": buffer_count,
-                "orientation": "landscape",
-                "content_filter": "high"
+                'query': query,
+                'per_page': count,
+                'orientation': 'squarish'
             }
             
-            logger.debug(f"Making request to Unsplash API: {url}")
-            logger.debug(f"Request params: {json.dumps(params, indent=2)}")
+            response = requests.get(
+                'https://api.unsplash.com/search/photos',
+                headers=headers,
+                params=params
+            )
+            response.raise_for_status()
             
-            urls = []
-            attempts = 0
-            
-            while len(urls) < count and attempts < retries:
-                try:
-                    response = requests.get(url, headers=headers, params=params)
-                    logger.info(f"Unsplash API response status: {response.status_code}")
-                    
-                    if response.status_code != 200:
-                        logger.error(f"Unsplash API error response: {response.text}")
-                        response.raise_for_status()
-                    
-                    photos = response.json()
-                    logger.debug(f"Unsplash API response: {json.dumps(photos, indent=2)}")
-                    
-                    new_urls = [photo["urls"]["regular"] for photo in photos]
-                    urls.extend(new_urls)
-                    
-                except Exception as e:
-                    logger.error(f"Error on attempt {attempts + 1}: {str(e)}")
-                    attempts += 1
-                    continue
-            
-            # Ensure we have unique URLs
-            urls = list(dict.fromkeys(urls))
-            logger.info(f"Successfully fetched {len(urls)} unique image URLs")
-            return urls[:count]  # Return only the number of images requested
+            urls = [photo['urls']['regular'] for photo in response.json()['results']]
+            logger.info(f"Found {len(urls)} images for query: {query}")
+            return urls
             
         except Exception as e:
-            logger.error(f"Error fetching Unsplash images: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            if isinstance(e, requests.exceptions.RequestException):
-                logger.error(f"Response content: {e.response.content if hasattr(e, 'response') else 'No response'}")
+            logger.error(f"Error fetching from Unsplash: {str(e)}")
             return []
 
-    def download_file(self, url: str, prefix: str = '') -> str:
-        """Download a file from URL and save it locally."""
+    def download_file(self, url: str) -> Optional[str]:
+        """Download a file from a URL."""
         try:
-            logger.info(f"Downloading file from URL: {url}")
-            response = requests.get(url, stream=True)
+            response = requests.get(url)
+            response.raise_for_status()
             
-            if response.status_code != 200:
-                logger.error(f"Failed to download file. Status code: {response.status_code}")
-                logger.error(f"Response content: {response.text}")
-                response.raise_for_status()
+            # Try to get extension from URL or content type
+            url_path = urlparse(url).path
+            ext = os.path.splitext(url_path)[1]
+            if not ext:
+                content_type = response.headers.get('content-type', '')
+                ext = {
+                    'image/jpeg': '.jpg',
+                    'image/png': '.png',
+                    'image/gif': '.gif',
+                    'video/mp4': '.mp4'
+                }.get(content_type, '.jpg')
             
-            # Get file extension from URL or content type
-            content_type = response.headers.get('content-type', '')
-            ext = self._get_extension(url, content_type)
-            logger.debug(f"Determined file extension: {ext} from content type: {content_type}")
+            # Save file
+            filename = f"media_{hash(url)}{ext}"
+            filepath = os.path.join(self.temp_dir, filename)
             
-            # Create temporary file
-            fd, temp_path = tempfile.mkstemp(prefix=prefix, suffix=ext, dir=self.temp_dir)
-            logger.debug(f"Created temporary file: {temp_path}")
+            with open(filepath, 'wb') as f:
+                f.write(response.content)
             
-            # Write content to file
-            total_size = 0
-            with os.fdopen(fd, 'wb') as temp_file:
-                for chunk in response.iter_content(chunk_size=8192):
-                    temp_file.write(chunk)
-                    total_size += len(chunk)
-            
-            logger.info(f"Successfully downloaded file to {temp_path} (size: {total_size} bytes)")
-            return temp_path
+            logger.info(f"Successfully downloaded file to {filepath}")
+            return filepath
             
         except Exception as e:
-            logger.error(f"Error downloading file from {url}: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"Error downloading from {url}: {str(e)}")
             return None
 
-    def _get_extension(self, url: str, content_type: str) -> str:
-        """Get file extension from URL or content type."""
-        # Try to get extension from URL
-        path = urlparse(url).path
-        ext = os.path.splitext(path)[1]
-        if ext:
-            return ext
+    def fetch_media(self, content: str, duration: float = 15.0) -> Dict[str, List[str]]:
+        """
+        Fetch media assets for video generation with smart content mixing.
+        
+        Args:
+            content: Text content to generate media for
+            duration: Target video duration in seconds
             
-        # If no extension in URL, try content type
-        if 'image/jpeg' in content_type:
-            return '.jpg'
-        elif 'image/png' in content_type:
-            return '.png'
-        elif 'audio/mpeg' in content_type:
-            return '.mp3'
-        else:
-            return '.tmp'
-
-    def fetch_media(self, content: str, duration: int = 10) -> Dict[str, List[str]]:
-        """Fetch media assets for video generation."""
+        Returns:
+            Dictionary containing lists of image and video file paths
+        """
         try:
-            logger.info(f"Starting media fetching for content: {content}")
+            # Analyze content to determine optimal media distribution
+            distribution = self.analyze_content_type(content)
+            image_ratio = distribution["image_ratio"]
+            video_ratio = distribution["video_ratio"]
             
-            # Calculate number of images needed with both minimum and maximum limits
-            MIN_IMAGES = 5
-            MAX_IMAGES = 10  # Maximum number of images to prevent excessive fetching
-            calculated_images = round(duration / 2)
-            num_images = max(MIN_IMAGES, min(MAX_IMAGES, calculated_images))
-            logger.info(f"Calculated number of images needed: {num_images} (duration: {duration}s, calculated: {calculated_images})")
+            # Calculate number of media items based on content analysis
+            total_slots = duration / 3  # Each media item gets ~3 seconds
+            num_images = min(max(3, round(total_slots * image_ratio)), 7)
+            num_videos = min(max(1, round(total_slots * video_ratio)), 3)
             
-            # Extract keywords for better image search
-            keywords = self.extract_keywords(content, max_keywords=5)  # Increased max_keywords for better coverage
+            logger.info(f"Content-based distribution - Images: {num_images} ({image_ratio:.1%}), Videos: {num_videos} ({video_ratio:.1%})")
+            logger.info(f"Distribution reasoning: {distribution.get('reasoning', 'Not provided')}")
+            
+            # Extract keywords categorized by type
+            keywords = self.extract_keywords(content)
             if not keywords:
-                logger.warning("No keywords extracted, using fallback keywords")
-                keywords = ["modern office", "technology", "business professional"]
+                logger.error("No keywords extracted from content")
+                return {'images': [], 'videos': []}
             
-            # Initialize image collection
-            all_image_urls = []
-            
-            # First pass: Try each keyword individually
-            for keyword in keywords:
-                if len(all_image_urls) >= num_images:
+            # Fetch images using static keywords
+            image_paths = []
+            for keyword in keywords["static_keywords"]:
+                if len(image_paths) >= num_images:
                     break
                     
-                remaining = num_images - len(all_image_urls)
-                image_urls = self.fetch_unsplash_images(keyword, count=remaining)
-                
-                # Only add new, unique URLs
-                new_urls = [url for url in image_urls if url not in all_image_urls]
-                all_image_urls.extend(new_urls)
-                logger.info(f"Fetched {len(new_urls)} new images for keyword '{keyword}'")
-            
-            # Second pass: Try combinations of keywords if we need more images
-            if len(all_image_urls) < num_images and len(keywords) >= 2:
-                for i in range(len(keywords) - 1):
-                    if len(all_image_urls) >= num_images:
+                urls = self.fetch_unsplash_images(keyword, count=2)
+                for url in urls:
+                    if len(image_paths) >= num_images:
                         break
                         
-                    for j in range(i + 1, len(keywords)):
-                        if len(all_image_urls) >= num_images:
-                            break
-                            
-                        combined_query = f"{keywords[i]} {keywords[j]}"
-                        remaining = num_images - len(all_image_urls)
-                        more_urls = self.fetch_unsplash_images(combined_query, count=remaining)
-                        
-                        # Only add new, unique URLs
-                        new_urls = [url for url in more_urls if url not in all_image_urls]
-                        all_image_urls.extend(new_urls)
-                        logger.info(f"Fetched {len(new_urls)} new images for combined query '{combined_query}'")
+                    image_path = self.download_file(url)
+                    if image_path:
+                        image_paths.append(image_path)
             
-            # Final pass: Use fallback queries if we still need more images
-            if len(all_image_urls) < num_images:
-                # Extract main topic or subject from the content for more relevant fallbacks
-                fallback_response = self.openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "Extract the main topic or subject from this text in 2-3 words, focusing on what would make good background images."
-                        },
-                        {
-                            "role": "user",
-                            "content": content
-                        }
-                    ],
-                    temperature=0.3,
-                    max_tokens=20
-                )
-                main_topic = fallback_response.choices[0].message.content.strip()
-                
-                fallback_queries = [
-                    f"{main_topic} professional",
-                    f"{main_topic} modern",
-                    "modern business",
-                    "technology workspace",
-                    "professional office"
-                ]
-                
-                for query in fallback_queries:
-                    if len(all_image_urls) >= num_images:
-                        break
-                        
-                    remaining = num_images - len(all_image_urls)
-                    more_urls = self.fetch_unsplash_images(query, count=remaining)
-                    
-                    # Only add new, unique URLs
-                    new_urls = [url for url in more_urls if url not in all_image_urls]
-                    all_image_urls.extend(new_urls)
-                    logger.info(f"Fetched {len(new_urls)} fallback images for query '{query}'")
+            # Fetch videos using dynamic keywords
+            video_paths = pexels_fetcher.fetch_relevant_videos(
+                keywords["dynamic_keywords"], 
+                count=num_videos
+            )
             
-            # Final check and warning
-            if len(all_image_urls) < MIN_IMAGES:
-                logger.warning(f"Could only fetch {len(all_image_urls)} unique images out of minimum {MIN_IMAGES} required")
-            
-            if not all_image_urls:
-                error_msg = f"No images found for content: {content}"
-                logger.error(error_msg)
-                raise Exception(error_msg)
-            
-            # Download all images
-            logger.info(f"Downloading {len(all_image_urls)} images")
-            image_paths = []
-            for i, url in enumerate(all_image_urls):
-                path = self.download_file(url, prefix=f'img_{i}_')
-                if path:
-                    image_paths.append(path)
-            
+            logger.info(f"Successfully fetched {len(image_paths)} images and {len(video_paths)} videos")
             return {
-                'images': image_paths
+                'images': image_paths,
+                'videos': video_paths
             }
             
         except Exception as e:
-            logger.error(f"Error in fetch_media: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            raise
+            logger.error(f"Error fetching media: {str(e)}")
+            return {'images': [], 'videos': []}
 
     def cleanup(self):
-        """Clean up temporary files."""
+        """Remove all temporary files."""
         try:
             import shutil
-            logger.info(f"Cleaning up temporary directory: {self.temp_dir}")
             shutil.rmtree(self.temp_dir)
-            logger.info(f"Successfully cleaned up temporary directory")
+            logger.info(f"Cleaned up temporary directory: {self.temp_dir}")
         except Exception as e:
-            logger.error(f"Error cleaning up temporary directory: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"Error cleaning up temporary files: {str(e)}")
 
-# Create singleton instance
+# Create a singleton instance
 media_fetcher = MediaFetcher() 
