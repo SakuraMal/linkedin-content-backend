@@ -197,75 +197,111 @@ class MediaFetcher:
             logger.info(f"Calculated number of images needed: {num_images} (duration: {duration}s, calculated: {calculated_images})")
             
             # Extract keywords for better image search
-            keywords = self.extract_keywords(content, max_keywords=3)
+            keywords = self.extract_keywords(content, max_keywords=5)  # Increased max_keywords for better coverage
             if not keywords:
                 logger.warning("No keywords extracted, using fallback keywords")
                 keywords = ["modern office", "technology", "business professional"]
             
-            # Fetch a minimum number of images per keyword
+            # Initialize image collection
             all_image_urls = []
-            images_per_keyword = max(2, round(num_images / len(keywords)))
             
-            # Try each keyword
+            # First pass: Try each keyword individually
             for keyword in keywords:
-                image_urls = self.fetch_unsplash_images(keyword, count=images_per_keyword)
-                all_image_urls.extend(image_urls)
-                logger.info(f"Fetched {len(image_urls)} images for keyword '{keyword}'")
-                
-                # Break early if we have enough images
                 if len(all_image_urls) >= num_images:
                     break
+                    
+                remaining = num_images - len(all_image_urls)
+                image_urls = self.fetch_unsplash_images(keyword, count=remaining)
+                
+                # Only add new, unique URLs
+                new_urls = [url for url in image_urls if url not in all_image_urls]
+                all_image_urls.extend(new_urls)
+                logger.info(f"Fetched {len(new_urls)} new images for keyword '{keyword}'")
             
-            # If we still don't have enough images, try combinations of keywords
+            # Second pass: Try combinations of keywords if we need more images
             if len(all_image_urls) < num_images and len(keywords) >= 2:
                 for i in range(len(keywords) - 1):
                     if len(all_image_urls) >= num_images:
                         break
-                    combined_query = f"{keywords[i]} {keywords[i + 1]}"
-                    remaining_needed = num_images - len(all_image_urls)
-                    if remaining_needed > 0:
-                        more_urls = self.fetch_unsplash_images(combined_query, count=remaining_needed)
-                        all_image_urls.extend(more_urls)
-                        logger.info(f"Fetched {len(more_urls)} additional images for combined query '{combined_query}'")
+                        
+                    for j in range(i + 1, len(keywords)):
+                        if len(all_image_urls) >= num_images:
+                            break
+                            
+                        combined_query = f"{keywords[i]} {keywords[j]}"
+                        remaining = num_images - len(all_image_urls)
+                        more_urls = self.fetch_unsplash_images(combined_query, count=remaining)
+                        
+                        # Only add new, unique URLs
+                        new_urls = [url for url in more_urls if url not in all_image_urls]
+                        all_image_urls.extend(new_urls)
+                        logger.info(f"Fetched {len(new_urls)} new images for combined query '{combined_query}'")
             
-            # Final fallback: use generic business/tech images if we still don't have enough
+            # Final pass: Use fallback queries if we still need more images
             if len(all_image_urls) < num_images:
-                fallback_queries = ["modern business", "technology workspace", "professional office"]
+                # Extract main topic or subject from the content for more relevant fallbacks
+                fallback_response = self.openai_client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "Extract the main topic or subject from this text in 2-3 words, focusing on what would make good background images."
+                        },
+                        {
+                            "role": "user",
+                            "content": content
+                        }
+                    ],
+                    temperature=0.3,
+                    max_tokens=20
+                )
+                main_topic = fallback_response.choices[0].message.content.strip()
+                
+                fallback_queries = [
+                    f"{main_topic} professional",
+                    f"{main_topic} modern",
+                    "modern business",
+                    "technology workspace",
+                    "professional office"
+                ]
+                
                 for query in fallback_queries:
                     if len(all_image_urls) >= num_images:
                         break
-                    remaining_needed = num_images - len(all_image_urls)
-                    if remaining_needed > 0:
-                        more_urls = self.fetch_unsplash_images(query, count=remaining_needed)
-                        all_image_urls.extend(more_urls)
-                        logger.info(f"Fetched {len(more_urls)} fallback images for query '{query}'")
+                        
+                    remaining = num_images - len(all_image_urls)
+                    more_urls = self.fetch_unsplash_images(query, count=remaining)
+                    
+                    # Only add new, unique URLs
+                    new_urls = [url for url in more_urls if url not in all_image_urls]
+                    all_image_urls.extend(new_urls)
+                    logger.info(f"Fetched {len(new_urls)} fallback images for query '{query}'")
             
-            # Ensure we have unique URLs and limit to the number we need
-            all_image_urls = list(dict.fromkeys(all_image_urls))[:num_images]
-            
+            # Final check and warning
             if len(all_image_urls) < MIN_IMAGES:
                 logger.warning(f"Could only fetch {len(all_image_urls)} unique images out of minimum {MIN_IMAGES} required")
             
             if not all_image_urls:
                 error_msg = f"No images found for content: {content}"
                 logger.error(error_msg)
-                return {"images": [], "error": error_msg}
+                raise Exception(error_msg)
             
             # Download all images
+            logger.info(f"Downloading {len(all_image_urls)} images")
             image_paths = []
-            for url in all_image_urls:  # Already limited to num_images above
-                image_path = self.download_file(url, prefix='img_')
-                if image_path:
-                    image_paths.append(image_path)
+            for i, url in enumerate(all_image_urls):
+                path = self.download_file(url, prefix=f'img_{i}_')
+                if path:
+                    image_paths.append(path)
             
-            logger.info(f"Successfully fetched {len(image_paths)} images: {image_paths}")
-            return {"images": image_paths}
+            return {
+                'images': image_paths
+            }
             
         except Exception as e:
-            error_msg = f"Error fetching media: {str(e)}"
-            logger.error(error_msg)
+            logger.error(f"Error in fetch_media: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-            return {"images": [], "error": error_msg}
+            raise
 
     def cleanup(self):
         """Clean up temporary files."""
