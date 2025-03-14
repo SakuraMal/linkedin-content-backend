@@ -10,6 +10,7 @@ from ..media.text_processor import text_processor
 from .storage import storage_service
 from app.models.video import VideoRequest
 import traceback
+import math
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
@@ -133,20 +134,28 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
                 
-            MIN_DURATION_PER_IMAGE = 3.0  # Minimum seconds per image
-            total_min_duration = MIN_DURATION_PER_IMAGE * num_images
+            # For a 15-second video, we want 5-7 images
+            # For longer videos, scale up proportionally but cap at 10 images
+            target_num_images = min(max(5, round(request.duration / 3)), 10)
             
-            if total_min_duration > request.duration:
-                # If minimum durations exceed total duration, distribute evenly
+            # If we have too many images, only use the first target_num_images
+            if num_images > target_num_images:
+                media_assets['images'] = media_assets['images'][:target_num_images]
+                num_images = target_num_images
+            
+            # Calculate duration per image to fill the total duration
+            segment_duration = request.duration / num_images
+            
+            # Ensure minimum duration of 3 seconds per image
+            MIN_DURATION_PER_IMAGE = 3.0
+            if segment_duration < MIN_DURATION_PER_IMAGE:
+                # Recalculate with fewer images if needed
+                num_images = min(num_images, math.floor(request.duration / MIN_DURATION_PER_IMAGE))
+                media_assets['images'] = media_assets['images'][:num_images]
                 segment_duration = request.duration / num_images
-            else:
-                # Calculate extra time to distribute
-                extra_time = request.duration - total_min_duration
-                extra_per_image = extra_time / num_images
-                segment_duration = MIN_DURATION_PER_IMAGE + extra_per_image
             
             durations = [segment_duration] * num_images
-            logger.info(f"Calculated segment durations: {segment_duration}s per image for {num_images} images")
+            logger.info(f"Using {num_images} images with {segment_duration:.2f}s per image")
             
             # Create video segments
             video_segments = media_processor.create_video_segments(media_assets, durations)
