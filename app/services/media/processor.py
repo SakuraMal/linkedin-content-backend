@@ -1,13 +1,18 @@
 import os
 import logging
-from typing import List, Dict, Tuple, Literal
-from PIL import Image
+from typing import List, Dict, Tuple, Literal, Union
+from PIL import Image, ImageFile
+from PIL.Image import Resampling
 from moviepy.editor import (
     ImageClip, AudioFileClip, concatenate_videoclips,
-    CompositeVideoClip, vfx
+    CompositeVideoClip, vfx, VideoFileClip, ColorClip
 )
 import tempfile
 import numpy as np
+import math
+
+# Prevent truncated images
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +89,8 @@ class MediaProcessor:
                     new_width = self.target_resolution[0]
                     new_height = int(self.target_resolution[0] / img_ratio)
                 
-                # Resize image
-                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                # Resize image using LANCZOS resampling
+                img = img.resize((new_width, new_height), Resampling.LANCZOS)
                 
                 # Create new image with target resolution and paste resized image in center
                 final_img = Image.new('RGB', self.target_resolution, (0, 0, 0))  # Black background
@@ -124,38 +129,127 @@ class MediaProcessor:
             logger.error(f"Error processing audio {audio_path}: {str(e)}")
             raise
 
-    def create_video_segments(self, media_files: Dict[str, List[str]], durations: List[float]) -> List[ImageClip]:
+    def process_video(self, video_path: str, target_duration: float = 3.0) -> VideoFileClip:
         """
-        Create video segments from processed images with transitions.
+        Process a video clip for inclusion in the final video.
+        - Resizes to target resolution
+        - Adjusts duration
+        - Centers the video
+        - Maintains aspect ratio with letterboxing/pillarboxing if needed
+        
+        Args:
+            video_path: Path to the video file
+            target_duration: Target duration in seconds
+            
+        Returns:
+            VideoFileClip: Processed video clip ready for final video
+        """
+        try:
+            # Load video
+            clip = VideoFileClip(video_path)
+            
+            # Trim or loop video to match target duration
+            if clip.duration > target_duration:
+                # Take the middle section of the video
+                start_time = (clip.duration - target_duration) / 2
+                clip = clip.subclip(start_time, start_time + target_duration)
+            elif clip.duration < target_duration:
+                # Loop the video to reach target duration
+                num_loops = math.ceil(target_duration / clip.duration)
+                clip = concatenate_videoclips([clip] * num_loops).subclip(0, target_duration)
+            
+            # Resize maintaining aspect ratio
+            target_ratio = self.target_resolution[0] / self.target_resolution[1]
+            clip_ratio = clip.w / clip.h
+            
+            if clip_ratio > target_ratio:
+                # Video is wider than target
+                new_height = self.target_resolution[1]
+                new_width = int(new_height * clip_ratio)
+            else:
+                # Video is taller than target
+                new_width = self.target_resolution[0]
+                new_height = int(new_width / clip_ratio)
+            
+            # Resize video
+            clip = clip.resize(width=new_width, height=new_height)
+            
+            # Create a black background clip
+            bg = ColorClip(self.target_resolution, color=(0,0,0))
+            bg = bg.set_duration(clip.duration)
+            
+            # Position video in center
+            x_pos = (self.target_resolution[0] - new_width) // 2
+            y_pos = (self.target_resolution[1] - new_height) // 2
+            clip = clip.set_position((x_pos, y_pos))
+            
+            # Composite with background
+            final_clip = CompositeVideoClip([bg, clip], size=self.target_resolution)
+            
+            logger.info(f"Successfully processed video: {video_path}")
+            return final_clip
+            
+        except Exception as e:
+            logger.error(f"Error processing video {video_path}: {str(e)}")
+            raise
+
+    def create_video_segments(self, media_files: Dict[str, List[str]], durations: List[float]) -> List[Union[ImageClip, VideoFileClip]]:
+        """
+        Create video segments from processed images and videos with transitions.
         
         Args:
             media_files: Dictionary containing paths to media files
-            durations: List of durations for each image
+            durations: List of durations for each media item
             
         Returns:
-            List[ImageClip]: List of processed video segments with transitions
+            List[Union[ImageClip, VideoFileClip]]: List of processed video segments
         """
         try:
             clips = []
-            total_clips = len(media_files['images'])
+            total_duration = 0
             
-            for i, (image_path, duration) in enumerate(zip(media_files['images'], durations)):
-                # Process image with exact duration
-                clip = self.process_image(image_path, duration)
+            # Process images first
+            image_paths = media_files.get('images', [])
+            video_paths = media_files.get('videos', [])
+            
+            # Calculate durations for each type
+            total_media = len(image_paths) + len(video_paths)
+            if total_media == 0:
+                raise ValueError("No media files provided")
+            
+            # Interleave images and videos
+            media_items = []
+            i, j = 0, 0
+            while i < len(image_paths) or j < len(video_paths):
+                if i < len(image_paths):
+                    media_items.append(('image', image_paths[i]))
+                    i += 1
+                if j < len(video_paths):
+                    media_items.append(('video', video_paths[j]))
+                    j += 1
+            
+            # Process each media item
+            for idx, (media_type, path) in enumerate(media_items):
+                duration = durations[idx] if idx < len(durations) else 3.0
+                
+                if media_type == 'image':
+                    clip = self.process_image(path, duration)
+                else:  # video
+                    clip = self.process_video(path, duration)
                 
                 # Apply transitions
-                if i == 0:  # First clip
+                if idx == 0:  # First clip
                     clip = clip.fadein(self.transition_duration)
-                if i == total_clips - 1:  # Last clip
+                if idx == len(media_items) - 1:  # Last clip
                     clip = clip.fadeout(self.transition_duration)
                 
-                # Set the start time for each clip
-                start_time = sum(durations[:i])
-                clip = clip.set_start(start_time)
+                # Set start time
+                clip = clip.set_start(total_duration)
+                total_duration += duration
                 
                 clips.append(clip)
-                logger.info(f"Added clip {i+1}/{total_clips} at {start_time}s with duration {duration}s")
-
+                logger.info(f"Added {media_type} clip {idx+1}/{len(media_items)} at {total_duration-duration}s with duration {duration}s")
+            
             logger.info(f"Created {len(clips)} video segments with {self.transition_type} transitions")
             return clips
             
@@ -163,7 +257,7 @@ class MediaProcessor:
             logger.error(f"Error creating video segments: {str(e)}")
             raise
 
-    def combine_with_audio(self, video_clips: List[ImageClip], audio_path: str) -> str:
+    def combine_with_audio(self, video_clips: List[Union[ImageClip, VideoFileClip]], audio_path: str) -> str:
         """
         Combine video segments with audio into final video.
         
