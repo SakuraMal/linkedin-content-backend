@@ -16,9 +16,9 @@ class MediaFetcher:
     def __init__(self):
         """Initialize the MediaFetcher service."""
         self.temp_dir = tempfile.mkdtemp(prefix='media_')
-        self.unsplash_api_key = os.getenv('UNSPLASH_API_KEY')
+        self.unsplash_api_key = os.getenv('UNSPLASH_ACCESS_KEY')
         if not self.unsplash_api_key:
-            logger.error("UNSPLASH_API_KEY not found in environment variables")
+            logger.error("UNSPLASH_ACCESS_KEY not found in environment variables")
             
         logger.info("Initialized MediaFetcher")
 
