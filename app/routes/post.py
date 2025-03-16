@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..services.openai import OpenAIService
 
 # Create Blueprint
-post_routes = Blueprint('post', __name__)
+bp = Blueprint('post', __name__)
 openai_service = OpenAIService()
 
 class PostGenerationRequest(BaseModel):
@@ -21,7 +21,7 @@ def validate_request_data(data: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
     except ValidationError as e:
         return False, {"errors": e.errors()}
 
-@post_routes.route('/generate', methods=['POST'])
+@bp.route('/generate', methods=['POST'])
 def generate_post():
     """
     Generate a LinkedIn post based on provided parameters.
