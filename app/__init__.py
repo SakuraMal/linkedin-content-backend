@@ -5,7 +5,7 @@ import logging
 from dotenv import load_dotenv
 import redis
 from .routes.video import bp as video_bp
-from .routes.test import test_bp
+from .routes.post import bp as post_bp
 
 load_dotenv()
 
@@ -62,6 +62,6 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
 
     # Register blueprints
     app.register_blueprint(video_bp, url_prefix='/api/video')
-    app.register_blueprint(test_bp, url_prefix='/api/test')
+    app.register_blueprint(post_bp, url_prefix='/api/post')
 
     return app

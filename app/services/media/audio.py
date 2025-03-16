@@ -5,6 +5,8 @@ from edge_tts import Communicate
 import asyncio
 import traceback
 from typing import Optional
+from moviepy.editor import AudioFileClip
+from moviepy.audio.fx.all import audio_fadein, audio_fadeout
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug level logging
@@ -16,13 +18,15 @@ class AudioGenerator:
         self.temp_dir = tempfile.mkdtemp(prefix='audio_')
         logger.info(f"Initialized AudioGenerator with temp directory: {self.temp_dir}")
 
-    def generate_audio(self, text: str, voice: Optional[str] = None) -> str:
+    def generate_audio(self, text: str, voice: Optional[str] = None, fade_in: float = 2.0, fade_out: float = 2.0) -> str:
         """
         Synchronous wrapper for async generate_audio method.
         
         Args:
             text: The text to convert to speech
             voice: Optional voice to use (defaults to en-US-GuyNeural)
+            fade_in: Duration of fade in effect in seconds
+            fade_out: Duration of fade out effect in seconds
             
         Returns:
             str: Path to the generated audio file
@@ -42,11 +46,53 @@ class AudioGenerator:
             result = loop.run_until_complete(self._generate_audio_async(text, voice))
             if result is None:
                 logger.error("Audio generation failed in async method")
+                return None
+
+            # Apply fade effects if specified
+            if fade_in > 0 or fade_out > 0:
+                result = self._apply_fade_effects(result, fade_in, fade_out)
+            
             return result
         except Exception as e:
             logger.error(f"Error in synchronous generate_audio: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
             return None
+
+    def _apply_fade_effects(self, audio_path: str, fade_in: float, fade_out: float) -> str:
+        """
+        Apply fade in/out effects to the audio file.
+        
+        Args:
+            audio_path: Path to the input audio file
+            fade_in: Duration of fade in effect in seconds
+            fade_out: Duration of fade out effect in seconds
+            
+        Returns:
+            str: Path to the processed audio file
+        """
+        try:
+            # Load audio clip
+            audio = AudioFileClip(audio_path)
+            
+            # Apply fade effects
+            if fade_in > 0:
+                audio = audio.fx(audio_fadein, fade_in)
+            if fade_out > 0:
+                audio = audio.fx(audio_fadeout, fade_out)
+            
+            # Save processed audio
+            output_path = os.path.join(self.temp_dir, f"processed_{os.path.basename(audio_path)}")
+            audio.write_audiofile(output_path)
+            
+            # Clean up
+            audio.close()
+            os.remove(audio_path)  # Remove original file
+            
+            return output_path
+        except Exception as e:
+            logger.error(f"Error applying fade effects: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return audio_path  # Return original file if processing fails
 
     async def _generate_audio_async(self, text: str, voice: Optional[str] = None) -> str:
         """

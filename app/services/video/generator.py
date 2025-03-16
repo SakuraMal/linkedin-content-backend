@@ -112,7 +112,20 @@ class VideoGenerator:
             self.update_job_status(redis_client, job_id, "audio_generating", progress=30)
             logger.info("Generating audio for processed content")
             logger.debug("Calling audio_generator.generate_audio")
-            audio_file = audio_generator.generate_audio(processed_text)
+            
+            # Get audio preferences or use defaults
+            audio_prefs = request.audioPreferences or {}
+            fade_in = audio_prefs.fadeInDuration if audio_prefs else 2.0
+            fade_out = audio_prefs.fadeOutDuration if audio_prefs else 2.0
+            
+            logger.info(f"Using audio preferences - fade in: {fade_in}s, fade out: {fade_out}s")
+            audio_file = audio_generator.generate_audio(
+                processed_text,
+                voice=request.voice,
+                fade_in=fade_in,
+                fade_out=fade_out
+            )
+            
             if audio_file:
                 logger.info(f"Audio generated successfully: {audio_file}")
                 self.update_job_status(redis_client, job_id, "audio_generated", progress=40)
