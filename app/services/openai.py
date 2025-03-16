@@ -26,14 +26,16 @@ class OpenAIService:
         wait=wait_exponential(multiplier=1, min=4, max=10),
         retry_error_callback=lambda retry_state: None
     )
-    def generate_post(self, theme: str, tone: str, length: str) -> Dict:
+    def generate_post(self, theme: str, tone: str, target_audience: str, length: int, include_video: bool = False) -> Dict:
         """
         Generate a LinkedIn post using OpenAI's GPT model.
         
         Args:
             theme (str): The post theme (e.g., "Leadership & Management")
             tone (str): The desired tone (e.g., "Professional")
-            length (str): Desired length category (e.g., "Medium (500-1000 characters)")
+            target_audience (str): Target audience for the post
+            length (int): Desired character length
+            include_video (bool): Whether to include video suggestions
             
         Returns:
             Dict: Generated post content and metadata
@@ -42,21 +44,14 @@ class OpenAIService:
             APIError: If OpenAI API call fails
         """
         try:
-            # Parse length requirement
-            char_limits = {
-                "Short (Under 500 characters)": (100, 500),
-                "Medium (500-1000 characters)": (500, 1000),
-                "Long (1000-1500 characters)": (1000, 1500)
-            }
-            min_chars, max_chars = char_limits.get(length, (500, 1000))
-
             # Create prompt for GPT
             prompt = f"""Generate a LinkedIn post about {theme}.
             Tone: {tone}
-            Length: Between {min_chars} and {max_chars} characters
+            Target Audience: {target_audience}
+            Length: Approximately {length} characters
             
             Guidelines:
-            - Make it engaging and thought-provoking
+            - Make it engaging and thought-provoking for {target_audience}
             - Include relevant hashtags
             - Focus on professional insights and experiences
             - Maintain the specified tone throughout
@@ -82,26 +77,43 @@ class OpenAIService:
             content = response.choices[0].message.content.strip()
             char_count = len(content)
 
-            return {
+            response_data = {
                 "success": True,
                 "data": {
                     "content": content,
                     "metadata": {
                         "theme": theme,
                         "tone": tone,
+                        "targetAudience": target_audience,
                         "length": length,
                         "characterCount": char_count,
+                        "includeVideo": include_video,
                         "timestamp": datetime.utcnow().isoformat()
                     }
                 }
             }
 
+            # If video is requested, add placeholder for video suggestion
+            if include_video:
+                response_data["data"]["videoSuggestion"] = {
+                    "type": "placeholder",
+                    "message": "Video generation will be implemented in a future update"
+                }
+
+            return response_data
+
         except APIError as e:
-            error_msg = f"OpenAI API error: {str(e)}"
-            raise APIError(error_msg) from e
+            logger.error(f"OpenAI API error: {str(e)}")
+            return {
+                "success": False,
+                "error": f"OpenAI API error: {str(e)}"
+            }
         except Exception as e:
-            error_msg = f"Unexpected error in post generation: {str(e)}"
-            raise Exception(error_msg) from e
+            logger.error(f"Unexpected error in post generation: {str(e)}")
+            return {
+                "success": False,
+                "error": f"Unexpected error in post generation: {str(e)}"
+            }
 
     def validate_response(self, content: str, min_chars: int, max_chars: int) -> bool:
         """
