@@ -15,7 +15,9 @@ openai_service = OpenAIService()
 class PostGenerationRequest(BaseModel):
     theme: str = Field(..., min_length=1, max_length=100)
     tone: str = Field(..., min_length=1, max_length=50)
-    length: str = Field(..., min_length=1, max_length=50)
+    targetAudience: str = Field(..., min_length=1, max_length=100)
+    length: int = Field(..., gt=0, lt=2000)  # Character length
+    includeVideo: bool = Field(default=False)
 
 def validate_request_data(data: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
     """Validate request data using Pydantic model."""
@@ -35,7 +37,9 @@ def generate_post():
     {
         "theme": "Leadership & Management",
         "tone": "Professional",
-        "length": "Medium (500-1000 characters)"
+        "targetAudience": "General Business Professionals",
+        "length": 500,
+        "includeVideo": true
     }
     """
     try:
@@ -64,7 +68,9 @@ def generate_post():
         result = openai_service.generate_post(
             theme=data['theme'],
             tone=data['tone'],
-            length=data['length']
+            target_audience=data['targetAudience'],
+            length=data['length'],
+            include_video=data.get('includeVideo', False)
         )
 
         return jsonify(result), HTTPStatus.OK
