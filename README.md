@@ -1,113 +1,109 @@
-# LinkedIn Content Generator - Backend API
+# LinkedIn Content Generator - Backend Service
 
-## Overview
-This is the backend service for the LinkedIn Content Generator, handling post generation and video creation. For detailed architecture information, please refer to [CURRENT_ARCHITECTURE.md](CURRENT_ARCHITECTURE.md).
+A Flask-based backend service for generating LinkedIn posts and videos using AI. Deployed on Fly.io.
 
-The Flask backend service for generating LinkedIn posts and videos using AI.
+## Features
 
-## Architecture
+- 🤖 AI-powered LinkedIn post generation with GPT-3.5 Turbo
+- 🎥 Professional video generation with AI narration
+- 🔒 Secure API endpoints
+- 📊 Request validation with Pydantic
+- 🎯 Customizable post parameters:
+  - Theme
+  - Tone
+  - Target audience
+  - Character length (precise control)
+  - Video generation option with AI narration
 
-This is the backend service of our microservices architecture. It handles:
+## Tech Stack
 
-- Post Generation with OpenAI
-- Video Generation Pipeline
-- Azure Text-to-Speech Integration
-- Google Cloud Storage Management
-- LinkedIn API Integration
+- **Framework**: Flask
+- **Language**: Python 3.9
+- **AI Integration**: OpenAI GPT-3.5 Turbo
+- **Video Processing**: MoviePy
+- **Validation**: Pydantic
+- **Deployment**: Fly.io
+- **Storage**: Google Cloud Storage (for video files)
+- **Error Handling**: Tenacity for retries
 
-## Service Communication
+## Prerequisites
 
-```mermaid
-Backend Service (Flask)
-└── Components:
-    ├── Content Generation API
-    │   ├── Post Generation
-    │   └── OpenAI Integration
-    ├── Media Processing API
-    │   ├── Video Generation
-    │   ├── Azure TTS Integration
-    │   └── Asset Management
-    └── Storage Integration
-        └── Google Cloud Storage
+Before you begin, ensure you have:
+- Python 3.9+ installed
+- An OpenAI API key
+- Google Cloud credentials (for video features)
+- Redis (for caching)
+
+## Environment Variables
+
+Create a `.env` file in the root directory:
+
+```env
+# OpenAI Configuration
+OPENAI_API_KEY=your_openai_api_key
+
+# Google Cloud Configuration
+GOOGLE_CLOUD_PROJECT=your_project_id
+GOOGLE_APPLICATION_CREDENTIALS=path/to/credentials.json
+GOOGLE_CLOUD_STORAGE_BUCKET=your_bucket_name
+
+# Redis Configuration
+REDIS_URL=your_redis_url
+REDIS_PASSWORD=your_redis_password
+
+# Flask Configuration
+FLASK_ENV=development
+FLASK_APP=app
+JWT_SECRET_KEY=your_jwt_secret
+
+# CORS Configuration
+CORS_ORIGINS=http://localhost:3000,https://your-frontend-domain.com
 ```
 
-## Technology Stack
+## Installation
 
-- Flask API
-- Python 3.11+
-- OpenAI API
-- Azure Text-to-Speech
-- Google Cloud Storage
-- MoviePy for video generation
-
-## Setup
-
-1. Create virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # Linux/Mac
-   # or
-   .\venv\Scripts\activate  # Windows
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Set up environment variables:
-   ```env
-   # Service Configuration
-   PORT=5000
-   FRONTEND_URL=http://localhost:3000
-   
-   # AI Services
-   OPENAI_API_KEY=your_openai_api_key
-   AZURE_SPEECH_KEY=your_azure_key
-   AZURE_SPEECH_REGION=your_azure_region
-   
-   # Storage
-   GOOGLE_CLOUD_PROJECT=your_project_id
-   GOOGLE_CLOUD_STORAGE_BUCKET=your_bucket_name
-   ```
-
-4. Run development server:
-   ```bash
-   python -m flask run
-   ```
-
-## Project Structure
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/linkedin-content-backend.git
+cd linkedin-content-backend
 ```
-backend/
-├── app/
-│   ├── routes/
-│   │   ├── post.py        # Post generation endpoints
-│   │   ├── video.py       # Video processing endpoints
-│   │   └── health.py      # Health check endpoints
-│   ├── services/
-│   │   ├── openai.py      # OpenAI integration
-│   │   ├── azure_tts.py   # Azure TTS integration
-│   │   └── storage.py     # GCS integration
-│   └── utils/
-│       └── helpers.py     # Utility functions
-├── requirements.txt
-└── main.py
+
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. Start the development server:
+```bash
+flask run
 ```
 
 ## API Endpoints
 
 ### Post Generation
-```http
-POST /api/post/generate
-Content-Type: application/json
+`POST /api/post/generate`
 
+Generate a LinkedIn post with optional video.
+
+Request body:
+```json
 {
   "theme": "Leadership & Management",
   "tone": "Professional",
-  "length": "Medium (500-1000 characters)"
+  "targetAudience": "Tech Professionals",
+  "length": 500,
+  "includeVideo": false
 }
+```
 
 Response:
+```json
 {
   "success": true,
   "data": {
@@ -115,122 +111,90 @@ Response:
     "metadata": {
       "theme": "Leadership & Management",
       "tone": "Professional",
-      "length": "Medium (500-1000 characters)",
-      "characterCount": 750,
-      "timestamp": "2024-03-11T13:34:29.789689"
+      "targetAudience": "Tech Professionals",
+      "length": 500,
+      "characterCount": 485,
+      "includeVideo": false,
+      "timestamp": "2024-03-16T08:44:22Z"
     }
   }
 }
 ```
 
-Length options:
-- Short (Under 500 characters)
-- Medium (500-1000 characters)
-- Long (1000-1500 characters)
+### Health Check
+`GET /health`
 
-The post generation endpoint uses OpenAI's GPT-3.5-turbo model to create engaging LinkedIn posts based on the specified theme, tone, and length. The service includes:
-- Input validation using Pydantic
-- Automatic retry mechanism for API calls
-- Character count validation
-- Error handling and detailed error messages
+Check service health status.
 
-### Video Generation
-```http
-POST /api/video/generate
-Content-Type: application/json
-Authorization: Bearer <token>
-
+Response:
+```json
 {
-  "postId": "123",
-  "style": "slideshow"
+  "status": "healthy",
+  "timestamp": "2024-03-16T08:44:22Z"
 }
 ```
 
-## Implementation History
+## Error Handling
 
-### March 11, 2024
-- Implemented OpenAI integration for post generation
-- Added post generation endpoint with validation
-- Updated dependencies to include OpenAI, Pydantic, and other required packages
-- Added retry mechanism for API calls using tenacity
-- Implemented error handling and logging
-- Added detailed implementation documentation in `IMPLEMENTATION.md`
+The service uses structured error responses:
 
-### Previous Updates
+```json
+{
+  "success": false,
+  "error": "Error message here"
+}
+```
+
+Common error scenarios:
+- Invalid request data
+- OpenAI API errors
+- Server errors
+
+## Development
+
+### Running Tests
+```bash
+pytest
+```
+
+### Code Style
+```bash
+flake8
+black .
+```
 
 ## Deployment
 
-The backend is deployed on Render as a Web Service:
-
-```yaml
-services:
-  - type: web
-    name: paa-some-api
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.11
-      - key: FRONTEND_URL
-        value: https://paa-some-frontend.onrender.com
-```
-
-## Testing
+The service is deployed on Fly.io:
 
 ```bash
-# Run tests
-pytest
+flyctl deploy
+```
 
-# Run with coverage
-pytest --cov=app
+## Architecture
+
+```
+app/
+├── __init__.py          # Flask app initialization
+├── routes/              # API routes
+│   ├── __init__.py
+│   └── post.py         # Post generation endpoints
+├── services/           # Business logic
+│   ├── __init__.py
+│   ├── openai.py      # OpenAI integration
+│   └── video/         # Video generation (coming soon)
+├── models/            # Data models
+└── utils/            # Utility functions
 ```
 
 ## Contributing
 
-1. Create a feature branch
-2. Make your changes
-3. Run tests
-4. Submit a pull request
+1. Fork the repository
+2. Create your feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## License
 
-This project is proprietary. See LICENSE file for details.
-
-## Documentation
-- [Current Architecture](CURRENT_ARCHITECTURE.md) - Main architecture documentation
-- [CORS Configuration](./docs/CORS.md) - Details about CORS setup and troubleshooting
-- Historical Documentation (Archived):
-  - `VIDEO_ARCHITECTURE.md.archived`
-  - `IMPLEMENTATION.md.archived`
-
-## Environment Variables
-
-The following environment variables are required for the application to function:
-
-### Service Configuration
-- `PORT`: Server port (default: 8080)
-- `ENVIRONMENT`: Application environment (development/production)
-- `VERSION`: Application version
-- `FLASK_ENV`: Flask environment (development/production)
-
-### AI Services
-- `OPENAI_API_KEY`: OpenAI API key for content generation
-
-### Media Services
-- `UNSPLASH_ACCESS_KEY`: Unsplash API key for image fetching
-- `PEXELS_API_KEY`: Pexels API key for video content
-
-### Storage Configuration
-- `GOOGLE_CLOUD_PROJECT`: Google Cloud project ID
-- `GOOGLE_CLOUD_STORAGE_BUCKET`: Google Cloud Storage bucket for video storage
-- `GOOGLE_APPLICATION_CREDENTIALS`: Path to Google Cloud credentials file (local) or base64 encoded credentials (production)
-
-### Redis Configuration
-- `REDIS_URL`: Redis connection URL (local or Upstash)
-
-### CORS Configuration
-- `CORS_ORIGINS`: Comma-separated list of allowed origins
-- `FRONTEND_URL`: Frontend application URL
-
-See `.env.example` for a complete template of all required environment variables.
+This project is proprietary. All rights reserved.

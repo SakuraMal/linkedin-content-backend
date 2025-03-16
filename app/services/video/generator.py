@@ -8,7 +8,7 @@ from ..media.processor import media_processor
 from ..media.audio import audio_generator
 from ..media.text_processor import text_processor
 from .storage import storage_service
-from app.models.video import VideoRequest
+from ...models.video import VideoRequest
 import traceback
 import math
 
@@ -170,8 +170,18 @@ class VideoGenerator:
             durations = [segment_duration] * num_images
             logger.info(f"Using {num_images} images with {segment_duration:.2f}s per image")
             
-            # Create video segments
-            video_segments = media_processor.create_video_segments(media_assets, durations)
+            # Get transition preferences
+            transition_prefs = request.transitionPreferences
+            transition_duration = transition_prefs.duration if transition_prefs else 0.5
+            
+            # Create video segments with AI-driven transitions if enabled
+            video_segments = media_processor.create_video_segments(
+                media_assets,
+                durations,
+                video_style=request.style,
+                transition_duration=transition_duration
+            )
+            
             if not video_segments:
                 error_msg = "Failed to create video segments"
                 logger.error(error_msg)

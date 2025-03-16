@@ -1,6 +1,7 @@
 import logging
 import openai
 import os
+import re
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -8,6 +9,10 @@ logger = logging.getLogger(__name__)
 class TextProcessor:
     # Average speaking rate (words per minute)
     SPEAKING_RATE = 150  # Standard speaking pace
+    
+    # Regex patterns for cleaning text
+    HASHTAG_PATTERN = r'#\w+'  # Matches hashtags
+    EMOJI_PATTERN = r'[\U0001F300-\U0001F9FF]|[\u2600-\u26FF\u2700-\u27BF]'  # Matches emojis and icons
     
     def __init__(self):
         """Initialize the TextProcessor service."""
@@ -23,6 +28,28 @@ class TextProcessor:
                 raise ValueError("OPENAI_API_KEY environment variable is not set")
             self._openai_client = openai.OpenAI(api_key=api_key)
         return self._openai_client
+
+    def clean_text(self, text: str) -> str:
+        """
+        Clean text by removing hashtags, emojis, and other non-narrative elements.
+        
+        Args:
+            text: Input text to clean
+            
+        Returns:
+            str: Cleaned text suitable for narration
+        """
+        # Remove hashtags
+        text = re.sub(self.HASHTAG_PATTERN, '', text)
+        
+        # Remove emojis and icons
+        text = re.sub(self.EMOJI_PATTERN, '', text)
+        
+        # Clean up extra whitespace
+        text = ' '.join(text.split())
+        
+        logger.info("Text cleaned for narration")
+        return text
 
     def estimate_duration(self, text: str) -> float:
         """
@@ -42,6 +69,8 @@ class TextProcessor:
     def process_text(self, text: str, target_duration: float) -> Optional[str]:
         """
         Process and summarize text to match target duration.
+        First cleans the text by removing hashtags and icons,
+        then adjusts length to match target duration if needed.
         
         Args:
             text: Input text to process
@@ -51,12 +80,16 @@ class TextProcessor:
             str: Processed text that will fit within target duration
         """
         try:
-            current_duration = self.estimate_duration(text)
+            # Clean the text first
+            cleaned_text = self.clean_text(text)
+            logger.info("Text cleaned for narration")
+            
+            current_duration = self.estimate_duration(cleaned_text)
             logger.info(f"Original text duration: {current_duration}s, target: {target_duration}s")
             
             if current_duration <= target_duration:
                 logger.info("Text already fits within target duration")
-                return text
+                return cleaned_text
                 
             # Calculate target word count
             target_words = int((target_duration / 60) * self.SPEAKING_RATE)
@@ -69,11 +102,11 @@ class TextProcessor:
                     messages=[
                         {
                             "role": "system",
-                            "content": f"You are a professional content summarizer. Summarize the following text to approximately {target_words} words while maintaining the key message and professional tone. The summary should be natural to speak and flow well when narrated."
+                            "content": f"You are a professional content summarizer. Summarize the following text to approximately {target_words} words while maintaining the key message and professional tone. The summary should be natural to speak and flow well when narrated. Do not include any hashtags, emojis, or special characters."
                         },
                         {
                             "role": "user",
-                            "content": text
+                            "content": cleaned_text
                         }
                     ],
                     temperature=0.7,
