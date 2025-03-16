@@ -1,11 +1,66 @@
-venv
-__pycache__
-*.pyc
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment files
 .env
+.env.local
+.env.*.local
+.env.test
+.env.production
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
 .DS_Store
-.pytest_cache
-.coverage
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Local development
 instance/
+.webassets-cache/
+
+# Coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
 *.db
 firebase-credentials.json
 firebase-credentials-base64.txt
