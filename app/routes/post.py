@@ -3,9 +3,13 @@ from http import HTTPStatus
 from typing import Dict, Any, Tuple
 from pydantic import BaseModel, Field, ValidationError
 from ..services.openai import OpenAIService
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # Create Blueprint
-bp = Blueprint('post', __name__)
+bp = Blueprint('post', __name__, url_prefix='/api/post')
 openai_service = OpenAIService()
 
 class PostGenerationRequest(BaseModel):
@@ -19,6 +23,7 @@ def validate_request_data(data: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
         PostGenerationRequest(**data)
         return True, {}
     except ValidationError as e:
+        logger.error(f"Validation error: {e.errors()}")
         return False, {"errors": e.errors()}
 
 @bp.route('/generate', methods=['POST'])
@@ -36,7 +41,10 @@ def generate_post():
     try:
         # Get request data
         data = request.get_json()
+        logger.info(f"Received request data: {data}")
+        
         if not data:
+            logger.error("No request data provided")
             return jsonify({
                 "success": False,
                 "error": "No request data provided"
@@ -45,6 +53,7 @@ def generate_post():
         # Validate request data
         is_valid, validation_errors = validate_request_data(data)
         if not is_valid:
+            logger.error(f"Invalid request data: {validation_errors}")
             return jsonify({
                 "success": False,
                 "error": "Invalid request data",
@@ -61,6 +70,7 @@ def generate_post():
         return jsonify(result), HTTPStatus.OK
 
     except Exception as e:
+        logger.error(f"Error generating post: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)
