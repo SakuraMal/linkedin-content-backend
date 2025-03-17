@@ -40,21 +40,31 @@ class TextProcessor:
         Returns:
             str: Cleaned text suitable for narration
         """
-        # Remove URLs
-        text = re.sub(self.URL_PATTERN, '', text)
-        
-        # Remove hashtags
-        text = re.sub(self.HASHTAG_PATTERN, '', text)
-        
-        # Remove emojis and icons
-        text = re.sub(self.EMOJI_PATTERN, '', text)
-        
-        # Clean up extra whitespace and multiple line breaks
-        text = re.sub(r'\s+', ' ', text)
-        text = text.strip()
-        
-        logger.info("Text cleaned for narration: removed URLs, hashtags, and emojis")
-        return text
+        try:
+            # Remove URLs
+            text = re.sub(self.URL_PATTERN, '', text)
+            
+            # Remove hashtags
+            text = re.sub(self.HASHTAG_PATTERN, '', text)
+            
+            # Remove emojis and icons
+            text = re.sub(self.EMOJI_PATTERN, '', text)
+            
+            # Clean up extra whitespace and multiple line breaks
+            text = re.sub(r'\s+', ' ', text)
+            text = text.strip()
+            
+            # Ensure we have some text left after cleaning
+            if not text:
+                logger.warning("Text is empty after cleaning, using original text")
+                return text.strip()
+            
+            logger.info("Text cleaned for narration: removed URLs, hashtags, and emojis")
+            return text
+        except Exception as e:
+            logger.error(f"Error cleaning text: {str(e)}")
+            # Return stripped original text if cleaning fails
+            return text.strip()
 
     def estimate_duration(self, text: str) -> float:
         """
@@ -85,8 +95,16 @@ class TextProcessor:
             str: Processed text that will fit within target duration
         """
         try:
+            if not text:
+                logger.error("Input text is empty")
+                return None
+
             # Clean the text first
             cleaned_text = self.clean_text(text)
+            if not cleaned_text:
+                logger.warning("Cleaned text is empty, using original text")
+                cleaned_text = text.strip()
+            
             logger.info("Text cleaned for narration")
             
             current_duration = self.estimate_duration(cleaned_text)
@@ -119,18 +137,24 @@ class TextProcessor:
                 )
                 
                 processed_text = response.choices[0].message.content.strip()
+                if not processed_text:
+                    logger.warning("OpenAI returned empty text, using cleaned text")
+                    return cleaned_text
+                    
                 final_duration = self.estimate_duration(processed_text)
-                
                 logger.info(f"Processed text duration: {final_duration}s")
                 return processed_text
                 
             except Exception as e:
                 logger.error(f"OpenAI API error: {str(e)}")
-                raise ValueError(f"Failed to process text with OpenAI: {str(e)}")
+                # If summarization fails, return the cleaned text instead of raising an error
+                logger.warning("Using cleaned text due to summarization failure")
+                return cleaned_text
             
         except Exception as e:
             logger.error(f"Error processing text: {str(e)}")
-            return None
+            # If all else fails, return the original text stripped
+            return text.strip()
 
 # Create a singleton instance
 text_processor = TextProcessor() 
