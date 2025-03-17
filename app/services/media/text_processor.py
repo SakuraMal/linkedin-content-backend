@@ -18,7 +18,7 @@ class TextProcessor:
     # Regex patterns for cleaning text
     HASHTAG_PATTERN = r'#\w+'  # Matches hashtags
     EMOJI_PATTERN = r'[\U0001F300-\U0001F9FF]|[\u2600-\u26FF\u2700-\u27BF]'  # Matches emojis and icons
-    URL_PATTERN = r'(?:https?:\/\/)?(?:[\w-]+\.)+[\w-]+(?:\/[\w-\.?=&%]*)*'  # Matches URLs with or without http(s)
+    URL_PATTERN = r'(?:https?://)?(?:[\w-]+\.)+[\w-]+(?:/[\w\-.?=&%]*)*'  # Matches URLs with or without http(s)
     
     def __init__(self):
         """Initialize the TextProcessor service."""
