@@ -13,6 +13,7 @@ class TextProcessor:
     # Regex patterns for cleaning text
     HASHTAG_PATTERN = r'#\w+'  # Matches hashtags
     EMOJI_PATTERN = r'[\U0001F300-\U0001F9FF]|[\u2600-\u26FF\u2700-\u27BF]'  # Matches emojis and icons
+    URL_PATTERN = r'(?:https?:\/\/)?(?:[\w-]+\.)+[\w-]+(?:\/[\w-\.?=&%]*)*'  # Matches URLs with or without http(s)
     
     def __init__(self):
         """Initialize the TextProcessor service."""
@@ -31,7 +32,7 @@ class TextProcessor:
 
     def clean_text(self, text: str) -> str:
         """
-        Clean text by removing hashtags, emojis, and other non-narrative elements.
+        Clean text by removing hashtags, emojis, URLs, and other non-narrative elements.
         
         Args:
             text: Input text to clean
@@ -39,16 +40,20 @@ class TextProcessor:
         Returns:
             str: Cleaned text suitable for narration
         """
+        # Remove URLs
+        text = re.sub(self.URL_PATTERN, '', text)
+        
         # Remove hashtags
         text = re.sub(self.HASHTAG_PATTERN, '', text)
         
         # Remove emojis and icons
         text = re.sub(self.EMOJI_PATTERN, '', text)
         
-        # Clean up extra whitespace
-        text = ' '.join(text.split())
+        # Clean up extra whitespace and multiple line breaks
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
         
-        logger.info("Text cleaned for narration")
+        logger.info("Text cleaned for narration: removed URLs, hashtags, and emojis")
         return text
 
     def estimate_duration(self, text: str) -> float:

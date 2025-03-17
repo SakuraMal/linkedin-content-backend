@@ -9,8 +9,10 @@ logger = logging.getLogger(__name__)
 
 class OpenAIService:
     def __init__(self):
-        """Initialize OpenAI client with API key from environment variables."""
+        """Initialize OpenAI client with API key and system instructions from environment variables."""
         api_key = os.getenv('OPENAI_API_KEY')
+        self.system_instructions = os.getenv('OPENAI_SYSTEM_INSTRUCTIONS', 
+            "You are a professional LinkedIn content creator, skilled in writing engaging posts that drive engagement.")
         logger.info("Initializing OpenAI service...")
         
         if not api_key:
@@ -63,7 +65,7 @@ class OpenAIService:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a professional LinkedIn content creator, skilled in writing engaging posts that drive engagement."},
+                    {"role": "system", "content": self.system_instructions},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
