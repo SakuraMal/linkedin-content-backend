@@ -3,6 +3,11 @@ import openai
 import os
 import re
 from typing import Optional
+import nltk
+
+# Download required NLTK data at module level
+nltk.download('punkt', quiet=True)
+from nltk.tokenize import sent_tokenize
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +23,7 @@ class TextProcessor:
     def __init__(self):
         """Initialize the TextProcessor service."""
         self._openai_client = None
-        logger.info("TextProcessor initialized")
+        logger.info("TextProcessor initialized with NLTK support")
 
     @property
     def openai_client(self):
@@ -33,6 +38,7 @@ class TextProcessor:
     def clean_text(self, text: str) -> str:
         """
         Clean text by removing hashtags, emojis, URLs, and other non-narrative elements.
+        Ensures proper sentence structure and punctuation.
         
         Args:
             text: Input text to clean
@@ -54,6 +60,10 @@ class TextProcessor:
             text = re.sub(r'\s+', ' ', text)
             text = text.strip()
             
+            # Ensure proper sentence endings
+            text = re.sub(r'([.!?])\s*([A-Z])', r'\1 \2', text)  # Add space after sentence endings
+            text = re.sub(r'([^.!?])\s*$', r'\1.', text)  # Add period if missing at end
+            
             # Ensure we have some text left after cleaning
             if not text:
                 logger.warning("Text is empty after cleaning, using original text")
@@ -69,6 +79,7 @@ class TextProcessor:
     def estimate_duration(self, text: str) -> float:
         """
         Estimate the duration of speech for given text.
+        Takes into account punctuation pauses.
         
         Args:
             text: Input text
@@ -76,16 +87,78 @@ class TextProcessor:
         Returns:
             float: Estimated duration in seconds
         """
-        # Count words (simple split by spaces)
+        # Count words
         word_count = len(text.split())
-        # Calculate duration in seconds
-        return (word_count / self.SPEAKING_RATE) * 60
+        
+        # Add time for punctuation pauses
+        sentences = sent_tokenize(text)
+        pause_time = len(sentences) * 0.5  # 0.5 second pause between sentences
+        
+        # Calculate base duration in seconds
+        speaking_duration = (word_count / self.SPEAKING_RATE) * 60
+        
+        return speaking_duration + pause_time
+
+    def adjust_text_to_duration(self, text: str, target_duration: float) -> str:
+        """
+        Adjust text to match target duration while preserving complete sentences.
+        
+        Args:
+            text: Input text
+            target_duration: Target duration in seconds
+            
+        Returns:
+            str: Adjusted text that fits the target duration
+        """
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"""You are a professional content summarizer. Create a concise, well-structured summary that:
+1. Takes approximately {target_duration} seconds to narrate at a pace of {self.SPEAKING_RATE} words per minute
+2. Maintains complete sentences and natural flow
+3. Preserves the key message and professional tone
+4. Is optimized for audio narration
+5. Includes a clear introduction and conclusion
+6. Uses transitions between ideas
+Do not include hashtags, URLs, or special characters."""
+                    },
+                    {
+                        "role": "user",
+                        "content": text
+                    }
+                ],
+                temperature=0.7,
+                max_tokens=500
+            )
+            
+            processed_text = response.choices[0].message.content.strip()
+            if not processed_text:
+                logger.warning("OpenAI returned empty text, using original")
+                return text
+                
+            # Verify the duration is close to target
+            actual_duration = self.estimate_duration(processed_text)
+            logger.info(f"Processed text duration: {actual_duration}s (target: {target_duration}s)")
+            
+            # If duration is significantly off, try one more time with adjusted target
+            if abs(actual_duration - target_duration) > 3:  # More than 3 seconds off
+                logger.info("Duration significantly off, adjusting...")
+                adjusted_words = int((target_duration / actual_duration) * len(processed_text.split()))
+                return self.adjust_text_to_duration(text, adjusted_words)
+                
+            return processed_text
+            
+        except Exception as e:
+            logger.error(f"Error adjusting text duration: {str(e)}")
+            return text
 
     def process_text(self, text: str, target_duration: float) -> Optional[str]:
         """
         Process and summarize text to match target duration.
-        First cleans the text by removing hashtags and icons,
-        then adjusts length to match target duration if needed.
+        Ensures complete sentences and natural flow for narration.
         
         Args:
             text: Input text to process
@@ -110,50 +183,21 @@ class TextProcessor:
             current_duration = self.estimate_duration(cleaned_text)
             logger.info(f"Original text duration: {current_duration}s, target: {target_duration}s")
             
-            if current_duration <= target_duration:
-                logger.info("Text already fits within target duration")
+            if abs(current_duration - target_duration) <= 1:
+                logger.info("Text already fits target duration")
                 return cleaned_text
-                
-            # Calculate target word count
-            target_words = int((target_duration / 60) * self.SPEAKING_RATE)
-            logger.info(f"Target word count: {target_words}")
             
-            # Use OpenAI to summarize the text
-            try:
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": f"You are a professional content summarizer. Summarize the following text to approximately {target_words} words while maintaining the key message and professional tone. The summary should be natural to speak and flow well when narrated. Do not include any hashtags, emojis, or special characters."
-                        },
-                        {
-                            "role": "user",
-                            "content": cleaned_text
-                        }
-                    ],
-                    temperature=0.7,
-                    max_tokens=500
-                )
-                
-                processed_text = response.choices[0].message.content.strip()
-                if not processed_text:
-                    logger.warning("OpenAI returned empty text, using cleaned text")
-                    return cleaned_text
-                    
-                final_duration = self.estimate_duration(processed_text)
-                logger.info(f"Processed text duration: {final_duration}s")
-                return processed_text
-                
-            except Exception as e:
-                logger.error(f"OpenAI API error: {str(e)}")
-                # If summarization fails, return the cleaned text instead of raising an error
-                logger.warning("Using cleaned text due to summarization failure")
-                return cleaned_text
+            # Adjust text to match duration while preserving sentences
+            processed_text = self.adjust_text_to_duration(cleaned_text, target_duration)
+            
+            # Final verification of duration
+            final_duration = self.estimate_duration(processed_text)
+            logger.info(f"Final text duration: {final_duration}s")
+            
+            return processed_text
             
         except Exception as e:
             logger.error(f"Error processing text: {str(e)}")
-            # If all else fails, return the original text stripped
             return text.strip()
 
 # Create a singleton instance
