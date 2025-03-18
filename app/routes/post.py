@@ -19,6 +19,9 @@ class PostGenerationRequest(BaseModel):
     length: int = Field(..., gt=0, lt=2000)  # Character length
     includeVideo: bool = Field(default=False)
 
+class ContentAnalysisRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=5000)
+
 def validate_request_data(data: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
     """Validate request data using Pydantic model."""
     try:
@@ -77,6 +80,64 @@ def generate_post():
 
     except Exception as e:
         logger.error(f"Error generating post: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), HTTPStatus.INTERNAL_SERVER_ERROR
+
+@bp.route('/analyze-content', methods=['POST'])
+def analyze_content():
+    """
+    Analyze content to extract keywords, sentiment, and other useful metadata.
+    
+    Expected request body:
+    {
+        "content": "Your content to analyze"
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "keywords": ["keyword1", "keyword2", ...],
+            "sentiment": "positive|negative|neutral",
+            "entities": [...],
+            "topics": [...]
+        }
+    }
+    """
+    try:
+        # Get request data
+        data = request.get_json()
+        logger.info(f"Received content analysis request")
+        
+        if not data:
+            logger.error("No request data provided")
+            return jsonify({
+                "success": False,
+                "error": "No request data provided"
+            }), HTTPStatus.BAD_REQUEST
+
+        # Validate request data
+        try:
+            analysis_request = ContentAnalysisRequest(**data)
+        except ValidationError as e:
+            logger.error(f"Invalid request data: {e.errors()}")
+            return jsonify({
+                "success": False,
+                "error": "Invalid request data",
+                "details": e.errors()
+            }), HTTPStatus.BAD_REQUEST
+
+        # Analyze content
+        result = openai_service.analyze_content(
+            content=analysis_request.content
+        )
+
+        return jsonify(result), HTTPStatus.OK
+
+    except Exception as e:
+        logger.error(f"Error analyzing content: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)
