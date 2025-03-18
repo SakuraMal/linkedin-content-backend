@@ -343,5 +343,113 @@ GET  /api/video/status/{id}    # Check generation status
 GET  /api/video/{id}          # Get video URL
 ```
 
+## Video from Uploaded Images Architecture
+
+### 1. User Image Upload Flow
+```mermaid
+graph TD
+    Frontend[Next.js Frontend]
+    Backend[Flask Backend]
+    Validation[File Validation]
+    TempStorage[Temporary Storage]
+    GCS[Google Cloud Storage]
+    
+    Frontend -->|1. Upload Images| Backend
+    Backend -->|2. Validate Files| Validation
+    Backend -->|3. Store Temporarily| TempStorage
+    Backend -->|4. Upload to Cloud| GCS
+    GCS -->|5. Return Image URLs| Backend
+    Backend -->|6. Return Image IDs| Frontend
+```
+
+### 2. Custom Video Generation Flow
+```mermaid
+graph TD
+    Frontend[Next.js Frontend]
+    Backend[Flask Backend]
+    Redis[Redis Status Tracking]
+    VideoGen[Video Generator]
+    AudioGen[Audio Generator]
+    GCS[Google Cloud Storage]
+    
+    Frontend -->|1. Generate with Image IDs| Backend
+    Backend -->|2. Return job_id| Frontend
+    Backend -->|3. Fetch User Images| GCS
+    Backend -->|4. Generate Audio| AudioGen
+    Backend -->|5. Create Video| VideoGen
+    VideoGen -->|6. Store Result| GCS
+    Backend -->|Track Progress| Redis
+    Frontend -->|7. Poll Status| Backend
+```
+
+### 3. File Validation Service
+```python
+class FileValidator:
+    def validate_images(self, files: List[FileStorage]) -> Dict[str, Any]:
+        """
+        Validate uploaded image files.
+        
+        Checks:
+        - File count (max 3)
+        - File size (max 2MB each, 6MB total)
+        - File type (JPEG, PNG, GIF)
+        - File content (basic validation)
+        
+        Returns validation results with errors if any.
+        """
+        pass
+```
+
+### 4. Image Storage Service
+```python
+class ImageStorageService:
+    def store_user_images(self, files: List[FileStorage], user_id: str) -> List[Dict[str, str]]:
+        """
+        Store user-uploaded images in Google Cloud Storage.
+        
+        Steps:
+        1. Generate unique IDs for each image
+        2. Upload to temporary folder in GCS
+        3. Set metadata (user_id, upload_time, etc.)
+        4. Return image IDs and URLs
+        
+        Images will be moved to permanent storage when used in a video.
+        """
+        pass
+```
+
+### 5. Modified Video Generator
+```python
+def generate_video(self, job_id: str, request: VideoRequest, redis_client: Redis) -> str:
+    """
+    Generate video with either auto-fetched or user-provided images.
+    
+    If request.user_image_ids is provided:
+    1. Fetch user images from GCS instead of searching for media
+    2. Process user images into video segments
+    3. Continue with normal video generation flow
+    
+    Otherwise, use the existing media fetching process.
+    """
+    pass
+```
+
+### 6. Security Considerations
+
+#### File Validation
+- MIME type checking using Python's `magic` library
+- Image dimension validation (minimum and maximum sizes)
+- Filename sanitization to prevent path traversal attacks
+
+#### Storage Security
+- Signed URLs with short expiration for frontend access
+- Separate storage buckets for temporary and permanent files
+- Automatic cleanup of unused temporary files (24-hour TTL)
+
+#### Rate Limiting
+- Maximum 10 uploads per user per hour
+- Maximum 50 uploads per user per day
+- IP-based rate limiting for unauthenticated requests
+
 ---
 > Note: Previous architecture files (ARCHITECTURE.md, VIDEO_ARCHITECTURE.md, IMPLEMENTATION.md) are preserved for historical reference but should not be used for current implementation. 

@@ -1,6 +1,6 @@
 import logging
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime
 from redis import Redis
 from ..media.fetcher import media_fetcher
@@ -9,8 +9,11 @@ from ..media.audio import audio_generator
 from ..media.text_processor import text_processor
 from .storage import storage_service
 from ...models.video import VideoRequest
+from ..storage.image_storage import image_storage_service
 import traceback
 import math
+import os
+import shutil
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
@@ -18,6 +21,8 @@ logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
 class VideoGenerator:
     STEPS = {
         'initialized': {'step': 1, 'message': 'Initializing video generation'},
+        'fetching_user_images': {'step': 2, 'message': 'Fetching user-provided images'},
+        'user_images_fetched': {'step': 2, 'message': 'User images fetched successfully'},
         'media_fetching': {'step': 2, 'message': 'Collecting media assets'},
         'media_fetched': {'step': 2, 'message': 'Media assets collected'},
         'audio_generating': {'step': 3, 'message': 'Generating audio narration'},
@@ -66,6 +71,43 @@ class VideoGenerator:
             logger.error(f"Error updating job status: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
 
+    def fetch_user_images(self, image_ids: List[str]) -> List[str]:
+        """
+        Fetch user-uploaded images from Google Cloud Storage.
+        
+        Args:
+            image_ids: List of image IDs to fetch
+            
+        Returns:
+            List[str]: List of local file paths to downloaded images
+        """
+        try:
+            logger.info(f"Fetching {len(image_ids)} user-uploaded images")
+            image_paths = []
+            
+            for image_id in image_ids:
+                # Get signed URL for the image
+                image_url = image_storage_service.get_image_url(image_id)
+                if not image_url:
+                    logger.warning(f"Could not find image with ID: {image_id}")
+                    continue
+                
+                # Download the image to a local file
+                local_path = media_fetcher.download_file(image_url)
+                if local_path:
+                    image_paths.append(local_path)
+                    logger.info(f"Downloaded user image {image_id} to {local_path}")
+                else:
+                    logger.error(f"Failed to download user image {image_id}")
+            
+            logger.info(f"Successfully fetched {len(image_paths)} user images")
+            return image_paths
+            
+        except Exception as e:
+            logger.error(f"Error fetching user images: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return []
+
     def generate_video(self, job_id: str, request: VideoRequest, redis_client: Redis) -> str:
         """
         Generate a video from content description.
@@ -78,6 +120,8 @@ class VideoGenerator:
         Returns:
             str: URL of the generated video
         """
+        temp_files = []  # Track temporary files for cleanup
+        
         try:
             logger.info(f"Starting video generation for job {job_id}")
             logger.info(f"Request data: {request.model_dump_json()}")
@@ -85,12 +129,37 @@ class VideoGenerator:
             # Update status to processing
             self.update_job_status(redis_client, job_id, "initialized", progress=0)
             
-            # Fetch media assets
-            self.update_job_status(redis_client, job_id, "media_fetching", progress=10)
-            logger.info(f"Fetching media assets for content: {request.content}")
-            media_assets = media_fetcher.fetch_media(request.content, duration=request.duration)
-            logger.info(f"Media assets fetched: {json.dumps(media_assets, indent=2)}")
-            self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
+            # Check if user provided custom images
+            user_image_paths = []
+            if hasattr(request, 'user_image_ids') and request.user_image_ids:
+                self.update_job_status(redis_client, job_id, "fetching_user_images", progress=5)
+                user_image_paths = self.fetch_user_images(request.user_image_ids)
+                self.update_job_status(redis_client, job_id, "user_images_fetched", progress=10)
+                
+                # Track user image paths for cleanup
+                temp_files.extend(user_image_paths)
+                
+                if not user_image_paths:
+                    logger.warning("User provided image IDs but none could be fetched")
+            
+            # Fetch media assets (only if user didn't provide images or not enough were found)
+            media_assets = {'images': user_image_paths, 'videos': []}
+            
+            if not user_image_paths:
+                self.update_job_status(redis_client, job_id, "media_fetching", progress=10)
+                logger.info(f"Fetching media assets for content: {request.content}")
+                media_assets = media_fetcher.fetch_media(request.content, duration=request.duration)
+                logger.info(f"Media assets fetched: {json.dumps(media_assets, indent=2)}")
+                self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
+                
+                # Track auto-generated media for cleanup
+                if media_assets and 'images' in media_assets:
+                    temp_files.extend(media_assets['images'])
+                if media_assets and 'videos' in media_assets:
+                    temp_files.extend(media_assets['videos'])
+            else:
+                logger.info(f"Using {len(user_image_paths)} user-provided images")
+                self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
             
             if not media_assets or not media_assets.get('images'):
                 error_msg = "No media assets were fetched"
@@ -125,6 +194,10 @@ class VideoGenerator:
                 fade_in=fade_in,
                 fade_out=fade_out
             )
+            
+            # Track audio file for cleanup
+            if audio_file:
+                temp_files.append(audio_file)
             
             if audio_file:
                 logger.info(f"Audio generated successfully: {audio_file}")
@@ -198,6 +271,10 @@ class VideoGenerator:
             logger.info(f"Final video created: {final_video}")
             self.update_job_status(redis_client, job_id, "combined", progress=80)
             
+            # Track final video for cleanup
+            if final_video:
+                temp_files.append(final_video)
+            
             if not final_video:
                 error_msg = "Failed to combine audio and video"
                 logger.error(error_msg)
@@ -220,6 +297,9 @@ class VideoGenerator:
             self.update_job_status(redis_client, job_id, "completed", progress=100, video_url=video_url)
             logger.info("Video generation completed successfully")
             
+            # Clean up temporary files
+            self.cleanup_temp_files(temp_files)
+            
             return video_url
             
         except Exception as e:
@@ -227,7 +307,46 @@ class VideoGenerator:
             logger.error(error_msg)
             logger.error(f"Traceback: {traceback.format_exc()}")
             self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+            
+            # Clean up temporary files even on error
+            self.cleanup_temp_files(temp_files)
+            
             raise
+
+    def cleanup_temp_files(self, file_paths: List[str]) -> None:
+        """
+        Clean up temporary files created during video generation.
+        
+        Args:
+            file_paths: List of file paths to clean up
+        """
+        logger.info(f"Cleaning up {len(file_paths)} temporary files")
+        
+        for file_path in file_paths:
+            try:
+                if file_path and os.path.exists(file_path):
+                    os.remove(file_path)
+                    logger.debug(f"Removed temporary file: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove temporary file {file_path}: {str(e)}")
+        
+        # Clean up any empty temporary directories
+        try:
+            # Get unique directories from file paths
+            temp_dirs = set()
+            for file_path in file_paths:
+                if file_path:
+                    dir_path = os.path.dirname(file_path)
+                    if dir_path.startswith('/tmp/') or 'temp' in dir_path.lower():
+                        temp_dirs.add(dir_path)
+            
+            # Remove empty directories
+            for dir_path in temp_dirs:
+                if os.path.exists(dir_path) and not os.listdir(dir_path):
+                    os.rmdir(dir_path)
+                    logger.debug(f"Removed empty temporary directory: {dir_path}")
+        except Exception as e:
+            logger.warning(f"Error cleaning up temporary directories: {str(e)}")
 
     def process_video_job(self, job_id: str, request: VideoRequest, redis_client: Redis) -> None:
         """Process video generation job."""

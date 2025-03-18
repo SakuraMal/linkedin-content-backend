@@ -6,6 +6,7 @@ A Flask-based backend service for generating LinkedIn posts and videos using AI.
 
 - 🤖 AI-powered LinkedIn post generation with GPT-3.5 Turbo
 - 🎥 Professional video generation with AI narration
+- 🖼️ Custom video creation from user-uploaded images
 - 🔒 Secure API endpoints
 - 📊 Request validation with Pydantic
 - 🎯 Customizable post parameters:
@@ -198,3 +199,116 @@ app/
 ## License
 
 This project is proprietary. All rights reserved.
+
+## Implementation Plan: Video from Uploaded Images
+
+### Overview
+This feature allows users to upload their own images (up to 3) to create a custom video instead of using auto-generated media assets.
+
+### Technical Specifications
+
+#### File Storage
+- Google Cloud Storage (already integrated) ✅
+- Temporary local storage during processing ✅
+- Automatic cleanup after processing ✅
+
+#### File Limitations
+- Maximum 3 images per video ✅
+- Maximum file size per image: 2MB ✅
+- Maximum total upload size: 6MB ✅
+- Supported formats: JPEG, PNG, GIF ✅
+
+#### Security Measures
+- File type validation (MIME type checking) ✅
+- Filename sanitization ✅
+- Virus/malware scanning (future enhancement) ⏳
+- Rate limiting for uploads ⏳
+
+### Implementation Checklist
+
+#### Backend Changes
+- [x] Create new API endpoint for image uploads
+- [x] Implement file validation (size, type, count)
+- [x] Add GCS upload functionality for user images
+- [x] Modify video generator to accept user-uploaded images
+- [x] Update VideoRequest model to include user image IDs
+- [x] Add cleanup process for temporary files
+
+#### Frontend Changes
+- [x] Create image upload component with drag-drop support
+- [x] Add image preview functionality
+- [x] Implement toggle between auto-generated and user-uploaded modes
+- [x] Add validation and error handling for uploads
+- [x] Update video generation request to include uploaded image IDs
+
+#### Testing
+- [x] Unit tests for file validation
+- [x] Unit tests for image storage service
+- [x] Unit tests for video generation with custom images
+- [x] Integration tests for upload workflow
+- [ ] End-to-end tests for video generation with custom images
+
+### API Endpoints
+
+#### Upload Images
+```
+POST /api/video/upload-images
+Content-Type: multipart/form-data
+
+Request:
+- files: Up to 3 image files (field name: "images")
+- user_id: (Optional) User identifier for organizing uploads
+
+Response:
+{
+  "success": true,
+  "message": "Successfully uploaded 2 images",
+  "images": [
+    {
+      "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      "filename": "example.jpg",
+      "storage_path": "user_uploads/images/2024/03/17/anonymous/f47ac10b-58cc-4372-a567-0e02b2c3d479.jpg",
+      "url": "https://storage.googleapis.com/bucket/...",
+      "content_type": "image/jpeg"
+    },
+    ...
+  ],
+  "image_ids": ["f47ac10b-58cc-4372-a567-0e02b2c3d479", "..."]
+}
+```
+
+#### Generate Video with Custom Images
+```
+POST /api/video/generate
+Content-Type: application/json
+
+Request:
+{
+  "content": "Post content...",
+  "style": "professional",
+  "duration": 30,
+  "user_image_ids": ["f47ac10b-58cc-4372-a567-0e02b2c3d479", "..."]
+}
+
+Response:
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "queued",
+  "message": "Video generation started"
+}
+```
+
+#### Check Video Generation Status
+```
+GET /api/video/status/<job_id>
+
+Response:
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "progress": 100,
+  "video_url": "https://storage.googleapis.com/bucket/videos/2024/03/17/550e8400-e29b-41d4-a716-446655440000.mp4",
+  "created_at": "2024-03-17T14:30:00Z",
+  "updated_at": "2024-03-17T14:35:00Z"
+}
+```

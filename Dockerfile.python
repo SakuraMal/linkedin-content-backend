@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y \
     libsm6 \
     libxext6 \
     curl \
+    libmagic1 \
+    file \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
@@ -15,6 +17,9 @@ COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Verify magic installation
+RUN python -c "import magic; print('magic module installed successfully')"
 
 # Download NLTK data
 RUN python -c "import nltk; nltk.download('punkt', download_dir='/usr/local/share/nltk_data')"
