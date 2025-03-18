@@ -18,7 +18,9 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     app = Flask(__name__, static_folder='../static')
     
     # CORS configuration for video generation architecture
-    allowed_origins = os.environ.get('CORS_ORIGINS', 'http://localhost:3000').split(',')
+    default_origins = 'http://localhost:3000,https://linkedin-content-frontend.vercel.app'
+    allowed_origins = os.environ.get('CORS_ORIGINS', default_origins).split(',')
+    logger.info(f"Configuring CORS with allowed origins: {allowed_origins}")
     CORS(app, 
          origins=allowed_origins,
          supports_credentials=True,
