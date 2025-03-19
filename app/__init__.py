@@ -27,33 +27,22 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     allowed_origins = os.environ.get('CORS_ORIGINS', default_origins).split(',')
     logger.info(f"Configuring CORS with allowed origins: {allowed_origins}")
 
-    # Configure CORS with a simpler approach that's known to work reliably
-    CORS(app, origins=allowed_origins, supports_credentials=True)
+    # Configure CORS with the exact configuration from docs/CORS.md
+    CORS(app, 
+         origins=allowed_origins,
+         supports_credentials=True,
+         allow_headers=['Content-Type', 'Authorization'],
+         methods=['GET', 'POST', 'OPTIONS'])
 
-    # Add after-request handler to ensure CORS headers are present on every response
+    # Keep this after-request handler for additional CORS header insurance
     @app.after_request
     def after_request(response):
-        # Get the origin from the request
         origin = request.headers.get('Origin')
-        
-        # Log headers for debugging CORS issues
-        logger.debug(f"Request method: {request.method}")
-        logger.debug(f"Request origin: {origin}")
-        logger.debug(f"Response status: {response.status}")
-        
-        # If origin matches our allowed origins, add explicit CORS headers
         if origin and origin in allowed_origins:
             response.headers.add('Access-Control-Allow-Origin', origin)
             response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept')
             response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
             response.headers.add('Access-Control-Allow-Credentials', 'true')
-        
-        # Special handling for OPTIONS requests to ensure preflight works
-        if request.method == 'OPTIONS':
-            logger.debug("Handling OPTIONS preflight request")
-            # For preflight, respond with 200 OK
-            response.status_code = 200
-        
         return response
 
     if test_config is None:
