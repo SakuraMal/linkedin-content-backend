@@ -245,14 +245,14 @@ def get_job_status(job_id):
         response = jsonify({})
         # Get the origin from the request
         origin = request.headers.get('Origin')
-        # Add CORS headers
+        # Add CORS headers - explicitly matching documented working configuration
         if origin:
             response.headers.add('Access-Control-Allow-Origin', origin)
-        else:
-            response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        response.headers.add('Access-Control-Max-Age', '3600')
+        if origin:
+            # Only add this when origin is present, as it doesn't make sense otherwise
+            response.headers.add('Access-Control-Allow-Credentials', 'true')
         return response, 200
     
     try:
@@ -284,11 +284,10 @@ def get_job_status(job_id):
         # Get the origin from the request
         origin = request.headers.get('Origin')
         
-        # Add CORS headers to ensure browsers can access this
+        # Add explicit CORS headers matching the documented working configuration
         if origin:
             response.headers.add('Access-Control-Allow-Origin', origin)
-        else:
-            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers.add('Access-Control-Allow-Credentials', 'true')
             
         return response
         
@@ -318,10 +317,13 @@ def cors_test():
             }
         })
         
-        # Explicitly add CORS headers for debugging
-        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept')
-        response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+        # Explicitly add CORS headers matching documentation
+        origin = request.headers.get('Origin')
+        if origin:
+            response.headers.add('Access-Control-Allow-Origin', origin)
+            response.headers.add('Access-Control-Allow-Credentials', 'true')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         
         return response
     
