@@ -4,6 +4,11 @@ import os
 import logging
 from dotenv import load_dotenv
 import redis
+
+# Initialize Sentry first, before other imports
+from .sentry import init_sentry
+init_sentry()
+
 from .routes.video import bp as video_bp
 from .routes.post import bp as post_bp
 
@@ -61,6 +66,13 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     @app.route('/test')
     def test_page():
         return send_from_directory(app.static_folder, 'test.html')
+        
+    @app.route('/sentry-test')
+    def sentry_test():
+        """Test endpoint to verify Sentry is capturing errors"""
+        # Deliberately trigger an error to test Sentry integration
+        division_by_zero = 1 / 0
+        return "This will never be reached"
 
     # Register blueprints
     app.register_blueprint(video_bp, url_prefix='/api/video')

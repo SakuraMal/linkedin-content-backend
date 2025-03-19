@@ -18,3 +18,4 @@ redis==5.0.1
 edge-tts>=6.1.9
 nltk>=3.8.1
 python-magic>=0.4.27
+sentry-sdk[flask]

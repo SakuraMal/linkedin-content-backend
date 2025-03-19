@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, HttpUrl
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Dict, Any, Union
 from enum import Enum
 
 class MediaItem(BaseModel):
@@ -28,17 +28,33 @@ class VideoStyle(str, Enum):
     CASUAL = "casual"
     DYNAMIC = "dynamic"
 
+# Define a generic content analysis model to accept different formats
+class ContentAnalysis(BaseModel):
+    # Make all fields optional with Any type to handle variety of formats
+    keywords: Optional[List[str]] = None
+    entities: Optional[Union[List[str], Dict[str, Any]]] = None
+    sentiment: Optional[str] = None
+    topics: Optional[List[str]] = None
+    
+    # Allow extra fields for flexibility with different frontend implementations
+    class Config:
+        extra = "allow"
+
 class VideoRequest(BaseModel):
     """Request model for video generation."""
     content: str = Field(..., description="Text description of the video content")
     style: VideoStyle = Field(default=VideoStyle.PROFESSIONAL, description="Style of the video")
-    duration: int = Field(default=10, ge=5, le=30, description="Duration of the video in seconds")
+    duration: int = Field(default=10, ge=5, le=120, description="Duration of the video in seconds")
     voice: Optional[str] = Field(default=None, description="Optional voice ID for text-to-speech")
     audioPreferences: Optional[AudioPreferences] = Field(default=None, description="Audio fade in/out preferences")
     transitionPreferences: Optional[TransitionPreferences] = Field(default=None, description="Video transition preferences")
     user_image_ids: Optional[List[str]] = Field(default=None, description="List of IDs for user-uploaded images to use in the video")
+    content_analysis: Optional[ContentAnalysis] = Field(default=None, description="Content analysis results for better video generation")
+    theme: Optional[str] = Field(default="business", description="Theme of the content")
     
     class Config:
+        # Allow unknown fields to handle different frontend formats
+        extra = "allow"
         schema_extra = {
             "example": {
                 "content": "This is a professional video about business growth strategies.",

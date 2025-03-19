@@ -4,6 +4,8 @@ from typing import Dict, Any, Tuple
 from pydantic import BaseModel, Field, ValidationError
 from ..services.openai import OpenAIService
 import logging
+import sentry_sdk
+import traceback
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -107,6 +109,9 @@ def analyze_content():
     }
     """
     try:
+        # Add more context to Sentry for this request
+        sentry_sdk.set_context("endpoint", {"name": "analyze-content"})
+        
         # Get request data
         data = request.get_json()
         logger.info(f"Received content analysis request")
@@ -118,27 +123,82 @@ def analyze_content():
                 "error": "No request data provided"
             }), HTTPStatus.BAD_REQUEST
 
+        # Add breadcrumb for request validation
+        sentry_sdk.add_breadcrumb(
+            category="request",
+            message="Validating content analysis request",
+            level="info"
+        )
+        
         # Validate request data
         try:
             analysis_request = ContentAnalysisRequest(**data)
         except ValidationError as e:
             logger.error(f"Invalid request data: {e.errors()}")
+            sentry_sdk.capture_message("Content analysis validation error")
             return jsonify({
                 "success": False,
                 "error": "Invalid request data",
                 "details": e.errors()
             }), HTTPStatus.BAD_REQUEST
 
-        # Analyze content
-        result = openai_service.analyze_content(
-            content=analysis_request.content
+        # Add context about the content being analyzed
+        content_length = len(analysis_request.content)
+        sentry_sdk.set_context("content", {
+            "length": content_length,
+            "sample": analysis_request.content[:100] + "..." if content_length > 100 else analysis_request.content
+        })
+        
+        # Add breadcrumb before calling analyze_content
+        sentry_sdk.add_breadcrumb(
+            category="analysis",
+            message="Calling OpenAI service analyze_content method",
+            level="info"
         )
-
-        return jsonify(result), HTTPStatus.OK
+        
+        # Analyze content
+        try:
+            result = openai_service.analyze_content(
+                content=analysis_request.content
+            )
+            
+            # Add breadcrumb for successful analysis
+            sentry_sdk.add_breadcrumb(
+                category="analysis",
+                message="Content analysis completed successfully",
+                level="info"
+            )
+            
+            return jsonify(result), HTTPStatus.OK
+            
+        except Exception as analysis_error:
+            # Capture specific exception for content analysis
+            logger.error(f"Error in content analysis: {str(analysis_error)}")
+            logger.error(traceback.format_exc())
+            
+            # Set error context for Sentry
+            sentry_sdk.set_context("error_details", {
+                "type": type(analysis_error).__name__,
+                "message": str(analysis_error),
+                "trace": traceback.format_exc()
+            })
+            
+            # Capture the exception with Sentry
+            sentry_sdk.capture_exception(analysis_error)
+            
+            return jsonify({
+                "success": False,
+                "error": f"Content analysis error: {str(analysis_error)}"
+            }), HTTPStatus.INTERNAL_SERVER_ERROR
 
     except Exception as e:
-        logger.error(f"Error analyzing content: {str(e)}")
+        # Capture any other unexpected exceptions
+        logger.error(f"Unexpected error analyzing content: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        sentry_sdk.capture_exception(e)
+        
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": f"Unexpected error: {str(e)}"
         }), HTTPStatus.INTERNAL_SERVER_ERROR 

@@ -1,16 +1,32 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import os
 import logging
 from openai import OpenAI, APIError
 from tenacity import retry, stop_after_attempt, wait_exponential
 from datetime import datetime
 import nltk
-from nltk.tokenize import word_tokenize
+from nltk.tokenize import word_tokenize, RegexpTokenizer
 from nltk.corpus import stopwords
 from string import punctuation
 import re
+import traceback
+import sentry_sdk
 
 logger = logging.getLogger(__name__)
+
+# Define a custom tokenizer as fallback
+FALLBACK_TOKENIZER = RegexpTokenizer(r'\w+|\$[\d\.]+|\S+')
+
+# Module-level flag for punkt_tab availability
+PUNKT_TAB_AVAILABLE = False
+
+try:
+    nltk.data.find('tokenizers/punkt')
+    PUNKT_TAB_AVAILABLE = True
+    logger.info("NLTK punkt tokenizer is available")
+except LookupError:
+    logger.warning("NLTK punkt tokenizer not found, will use fallback tokenizer")
+    PUNKT_TAB_AVAILABLE = False
 
 class OpenAIService:
     def __init__(self):
@@ -28,14 +44,141 @@ class OpenAIService:
         self.model = "gpt-3.5-turbo"  # Using GPT-3.5 Turbo model
         logger.info("OpenAI service initialized successfully")
         
+        # Setup fallback tokenizer flag
+        self.use_fallback_tokenizer = False
+        
         # Initialize NLTK resources if needed for content analysis
         try:
-            nltk.data.find('tokenizers/punkt')
-            nltk.data.find('corpora/stopwords')
-        except LookupError:
-            logger.info("Downloading NLTK resources")
-            nltk.download('punkt')
-            nltk.download('stopwords')
+            sentry_sdk.add_breadcrumb(
+                category="nltk",
+                message="Checking NLTK resources",
+                level="info"
+            )
+            
+            # Try to find punkt and stopwords
+            try:
+                nltk.data.find('tokenizers/punkt')
+                logger.info("Found NLTK punkt resource")
+                
+                # Check specifically for punkt_tab resource
+                try:
+                    nltk.data.find('tokenizers/punkt/punkt_tab')
+                    logger.info("Found NLTK punkt_tab resource")
+                    sentry_sdk.add_breadcrumb(
+                        category="nltk",
+                        message="punkt_tab resource found",
+                        level="info"
+                    )
+                except LookupError as e:
+                    logger.warning(f"punkt_tab resource not found: {e}")
+                    sentry_sdk.add_breadcrumb(
+                        category="nltk",
+                        message=f"punkt_tab resource not found: {e}",
+                        level="warning"
+                    )
+                    self.use_fallback_tokenizer = True
+            except LookupError:
+                logger.warning("punkt resource not found")
+                self.use_fallback_tokenizer = True
+            
+            try:
+                nltk.data.find('corpora/stopwords')
+                logger.info("Found NLTK stopwords resource")
+            except LookupError:
+                logger.warning("stopwords resource not found")
+                
+            # Download resources if not found
+            if self.use_fallback_tokenizer:
+                logger.info("Downloading NLTK resources")
+                sentry_sdk.add_breadcrumb(
+                    category="nltk",
+                    message="Downloading NLTK resources",
+                    level="info"
+                )
+                
+                try:
+                    # First try punkt_tab directly (for NLTK 3.8.2+)
+                    nltk.download('punkt_tab')
+                    self.use_fallback_tokenizer = False
+                    sentry_sdk.add_breadcrumb(
+                        category="nltk",
+                        message="Downloaded punkt_tab",
+                        level="info"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to download punkt_tab: {e}")
+                    sentry_sdk.add_breadcrumb(
+                        category="nltk",
+                        message=f"Failed to download punkt_tab: {e}",
+                        level="warning"
+                    )
+                    
+                    # Fall back to punkt (for older NLTK versions)
+                    try:
+                        nltk.download('punkt')
+                        logger.info("Downloaded punkt")
+                        
+                        # Check if punkt_tab is now available
+                        try:
+                            nltk.data.find('tokenizers/punkt/punkt_tab')
+                            self.use_fallback_tokenizer = False
+                            logger.info("punkt_tab is now available after punkt download")
+                        except LookupError:
+                            logger.warning("punkt_tab still not available after punkt download")
+                            self.use_fallback_tokenizer = True
+                    except Exception as e:
+                        logger.warning(f"Failed to download punkt: {e}")
+                        self.use_fallback_tokenizer = True
+                
+                nltk.download('stopwords')
+        except Exception as e:
+            logger.error(f"Error initializing NLTK resources: {e}")
+            self.use_fallback_tokenizer = True
+            sentry_sdk.capture_exception(e)
+            sentry_sdk.add_breadcrumb(
+                category="nltk",
+                message=f"Error initializing NLTK resources: {e}",
+                level="error"
+            )
+        
+        # Log final state
+        if self.use_fallback_tokenizer:
+            logger.info("Using fallback tokenizer")
+            sentry_sdk.set_tag("nltk.tokenizer", "fallback")
+        else:
+            logger.info("Using NLTK tokenizer")
+            sentry_sdk.set_tag("nltk.tokenizer", "nltk")
+
+    def tokenize_text(self, text):
+        """
+        Tokenize text using NLTK if available, otherwise use a simple fallback tokenizer.
+        
+        Args:
+            text (str): The text to tokenize
+            
+        Returns:
+            list: List of tokens
+        """
+        # Use fallback tokenizer if determined necessary during init
+        if self.use_fallback_tokenizer:
+            return FALLBACK_TOKENIZER.tokenize(text.lower())
+        
+        # Try NLTK tokenization, with fallback if it fails
+        try:
+            return word_tokenize(text.lower())
+        except LookupError as e:
+            logger.warning(f"NLTK tokenization error: {e}")
+            sentry_sdk.capture_message(f"NLTK tokenization error: {e}")
+            
+            # Update state for future calls
+            self.use_fallback_tokenizer = True
+            sentry_sdk.set_tag("nltk.tokenizer", "fallback")
+            
+            # Use fallback tokenizer
+            return FALLBACK_TOKENIZER.tokenize(text.lower())
+        except Exception as e:
+            logger.warning(f"Unexpected tokenization error: {e}")
+            return FALLBACK_TOKENIZER.tokenize(text.lower())
 
     @retry(
         stop=stop_after_attempt(3),
@@ -165,16 +308,85 @@ class OpenAIService:
             APIError: If OpenAI API call fails
         """
         try:
-            # First, perform basic analysis using NLTK
-            # Extract potential keywords using frequency analysis
-            words = word_tokenize(content.lower())
-            stop_words = set(stopwords.words('english'))
-            filtered_words = [word for word in words if word.isalnum() and word not in stop_words and len(word) > 3]
+            sentry_sdk.add_breadcrumb(
+                category="analysis",
+                message="Starting content analysis",
+                level="info"
+            )
+            
+            # Track which type of tokenizer we're using in Sentry
+            sentry_sdk.set_context("tokenizer", {
+                "type": "fallback" if self.use_fallback_tokenizer else "nltk",
+                "content_length": len(content)
+            })
+            
+            # First, perform basic analysis using NLTK or fallback tokenizer
+            try:
+                # Use the tokenize_text method which handles fallback
+                words = self.tokenize_text(content.lower())
+                sentry_sdk.add_breadcrumb(
+                    category="analysis",
+                    message=f"Tokenization successful: {len(words)} tokens",
+                    level="info"
+                )
+            except Exception as e:
+                logger.error(f"Error during tokenization: {str(e)}")
+                sentry_sdk.capture_exception(e)
+                # Use a very simple fallback tokenization as a last resort
+                words = re.findall(r'\w+', content.lower())
+                sentry_sdk.add_breadcrumb(
+                    category="analysis",
+                    message=f"Using emergency fallback tokenization after error: {len(words)} tokens",
+                    level="warning"
+                )
+            
+            # Get stopwords if available, otherwise use a simple list
+            try:
+                stop_words = set(stopwords.words('english'))
+            except Exception as e:
+                logger.warning(f"Error getting stopwords: {str(e)}")
+                # Simple fallback stopwords
+                stop_words = set(['the', 'a', 'an', 'and', 'in', 'on', 'at', 'to', 'for', 'of', 'with'])
+                sentry_sdk.add_breadcrumb(
+                    category="analysis",
+                    message="Using fallback stopwords",
+                    level="warning"
+                )
+            
+            # Filter words
+            try:
+                filtered_words = [word for word in words if word.isalnum() and word not in stop_words and len(word) > 3]
+                sentry_sdk.add_breadcrumb(
+                    category="analysis",
+                    message=f"Filtered to {len(filtered_words)} words",
+                    level="info"
+                )
+            except Exception as e:
+                logger.error(f"Error during word filtering: {str(e)}")
+                sentry_sdk.capture_exception(e)
+                filtered_words = words  # Use unfiltered words as fallback
             
             # Get word frequency
-            from collections import Counter
-            word_counts = Counter(filtered_words)
-            keywords_nltk = [word for word, count in word_counts.most_common(10)]
+            try:
+                from collections import Counter
+                word_counts = Counter(filtered_words)
+                keywords_nltk = [word for word, count in word_counts.most_common(10)]
+                sentry_sdk.add_breadcrumb(
+                    category="analysis",
+                    message="Extracted NLTK keywords successfully",
+                    level="info"
+                )
+            except Exception as e:
+                logger.error(f"Error during keyword extraction: {str(e)}")
+                sentry_sdk.capture_exception(e)
+                keywords_nltk = filtered_words[:10] if len(filtered_words) > 10 else filtered_words
+            
+            # Track state before OpenAI API call
+            sentry_sdk.add_breadcrumb(
+                category="analysis",
+                message="Preparing to call OpenAI API for advanced analysis",
+                level="info"
+            )
             
             # Then use OpenAI for more sophisticated analysis
             prompt = f"""Analyze the following content for a LinkedIn post and extract:
@@ -204,15 +416,30 @@ class OpenAIService:
 
             # Extract generated analysis
             analysis_text = response.choices[0].message.content.strip()
+            sentry_sdk.add_breadcrumb(
+                category="analysis",
+                message="OpenAI API call successful",
+                level="info"
+            )
             
             # Try to extract JSON from the response (if it's formatted as JSON)
             import json
             try:
                 # First try to see if the whole response is JSON
                 analysis_data = json.loads(analysis_text)
+                sentry_sdk.add_breadcrumb(
+                    category="analysis",
+                    message="Successfully parsed response as JSON",
+                    level="info"
+                )
             except json.JSONDecodeError:
                 # If not, use regex to try to extract JSON-like structure and parse manually
                 logger.info("Couldn't parse response as JSON, using processed output")
+                sentry_sdk.add_breadcrumb(
+                    category="analysis",
+                    message="Using regex-based extraction for non-JSON response",
+                    level="warning"
+                )
                 
                 # Fallback to a simpler, regex-based extraction
                 keywords_match = re.search(r'keywords?[:\s]+\[([^\]]+)\]', analysis_text, re.IGNORECASE)
@@ -253,6 +480,12 @@ class OpenAIService:
                         combined_keywords.append(keyword)
                 analysis_data["keywords"] = combined_keywords[:15]  # Limit to 15 keywords
             
+            sentry_sdk.add_breadcrumb(
+                category="analysis",
+                message="Content analysis completed successfully",
+                level="info"
+            )
+            
             return {
                 "success": True,
                 "data": analysis_data
@@ -260,12 +493,24 @@ class OpenAIService:
 
         except APIError as e:
             logger.error(f"OpenAI API error during content analysis: {str(e)}")
+            sentry_sdk.capture_exception(e)
+            sentry_sdk.set_context("api_error", {
+                "message": str(e),
+                "type": "api_error"
+            })
             return {
                 "success": False,
                 "error": f"OpenAI API error: {str(e)}"
             }
         except Exception as e:
             logger.error(f"Unexpected error in content analysis: {str(e)}")
+            logger.error(traceback.format_exc())
+            sentry_sdk.capture_exception(e)
+            sentry_sdk.set_context("error_details", {
+                "message": str(e),
+                "type": type(e).__name__,
+                "traceback": traceback.format_exc()
+            })
             return {
                 "success": False,
                 "error": f"Unexpected error in content analysis: {str(e)}"

@@ -34,6 +34,7 @@ Before you begin, ensure you have:
 - An OpenAI API key
 - Google Cloud credentials (for video features)
 - Redis (for caching)
+- Required NLTK resources - see [NLTK Requirements](./NLTK_REQUIREMENTS.md) for critical details
 
 ## Environment Variables
 
@@ -80,7 +81,12 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Start the development server:
+4. Install required NLTK resources:
+```bash
+python nltk_install.py
+```
+
+5. Start the development server:
 ```bash
 flask run
 ```
@@ -312,3 +318,16 @@ Response:
   "updated_at": "2024-03-17T14:35:00Z"
 }
 ```
+
+## Critical Dependencies
+
+### NLTK Resources
+
+The application relies on specific NLTK resources for text analysis and content processing. Missing resources can cause failures in the content analysis pipeline. See [NLTK Requirements](./NLTK_REQUIREMENTS.md) for detailed information about:
+
+- Required resources
+- Installation methods
+- Error handling strategies
+- Troubleshooting steps
+
+**Important:** Always verify NLTK resources during deployment to prevent service disruptions.

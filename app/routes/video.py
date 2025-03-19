@@ -9,6 +9,8 @@ import logging
 import json
 from datetime import datetime, timedelta
 import redis
+import traceback
+import sentry_sdk
 
 bp = Blueprint('video', __name__)
 video_generator = VideoGenerator()
@@ -98,12 +100,88 @@ def generate_video():
         # Log the request
         logging.info(f"Received video generation request: {json.dumps(request_data)}")
         
-        # Validate request using Pydantic model
+        # Add context to Sentry
+        sentry_sdk.set_context("video_generation", {
+            "content_length": len(request_data.get("content", "")),
+            "user_image_count": len(request_data.get("user_image_ids", [])) if request_data.get("user_image_ids") else 0,
+            "has_content_analysis": "content_analysis" in request_data
+        })
+        
+        # Add breadcrumb for request validation
+        sentry_sdk.add_breadcrumb(
+            category="video_generation",
+            message="Validating video generation request",
+            level="info"
+        )
+        
+        # Check for content_analysis field and restructure if necessary
+        if "content_analysis" in request_data:
+            sentry_sdk.set_context("content_analysis", {
+                "original": request_data["content_analysis"]
+            })
+            sentry_sdk.add_breadcrumb(
+                category="video_generation",
+                message="Found content_analysis in request",
+                level="info"
+            )
+        
+        # Handle possible field mapping issues for backward compatibility
         try:
-            video_request = VideoRequest(**request_data)
+            # Ensure the request data conforms to the VideoRequest model
+            # The model expects certain fields like audioPreferences but frontend might send audio_preferences
+            request_data_normalized = {}
+            
+            # Direct field mappings
+            for key in ["content", "style", "duration", "voice", "user_image_ids", "theme"]:
+                if key in request_data:
+                    request_data_normalized[key] = request_data[key]
+            
+            # Handle nested structures and camelCase vs snake_case issues
+            if "audioPreferences" in request_data:
+                request_data_normalized["audioPreferences"] = request_data["audioPreferences"]
+            elif "audio_preferences" in request_data:
+                request_data_normalized["audioPreferences"] = request_data["audio_preferences"]
+                
+            if "transitionPreferences" in request_data:
+                request_data_normalized["transitionPreferences"] = request_data["transitionPreferences"]
+            elif "transition_preferences" in request_data:
+                request_data_normalized["transitionPreferences"] = request_data["transition_preferences"]
+                
+            # Handle content_analysis field which might use different structures
+            if "content_analysis" in request_data:
+                # Store original content analysis in Sentry for debugging
+                sentry_sdk.add_breadcrumb(
+                    category="video_generation",
+                    message="Processing content_analysis from request",
+                    level="info",
+                    data={"content_analysis": request_data["content_analysis"]}
+                )
+            
+            sentry_sdk.add_breadcrumb(
+                category="video_generation",
+                message="Request data normalized",
+                level="info",
+                data={"normalized_data": request_data_normalized}
+            )
+            
+            # Validate request using Pydantic model
+            video_request = VideoRequest(**request_data_normalized)
+            
         except Exception as e:
             logging.error(f"Invalid request data: {str(e)}")
-            return jsonify({"error": f"Invalid request data: {str(e)}"}), 400
+            sentry_sdk.capture_exception(e)
+            
+            # Add detailed error context
+            sentry_sdk.set_context("validation_error", {
+                "error": str(e),
+                "trace": traceback.format_exc(),
+                "request_data": request_data
+            })
+            
+            return jsonify({
+                "error": f"Invalid request data: {str(e)}", 
+                "details": str(e)
+            }), 400
             
         # Generate a unique job ID
         job_id = str(uuid.uuid4())
@@ -120,6 +198,13 @@ def generate_video():
             "updated_at": datetime.utcnow().isoformat()
         }
         redis_client.set(f"job:{job_id}:status", json.dumps(job_status))
+        
+        # Add breadcrumb for job creation
+        sentry_sdk.add_breadcrumb(
+            category="video_generation",
+            message=f"Video generation job created with ID: {job_id}",
+            level="info"
+        )
         
         # Start video generation in background
         import threading
@@ -138,6 +223,11 @@ def generate_video():
         
     except Exception as e:
         logging.error(f"Error generating video: {str(e)}")
+        logging.error(traceback.format_exc())
+        
+        # Capture exception in Sentry
+        sentry_sdk.capture_exception(e)
+        
         return jsonify({"error": f"Error generating video: {str(e)}"}), 500
 
 @bp.route('/status/<job_id>', methods=['GET'])
