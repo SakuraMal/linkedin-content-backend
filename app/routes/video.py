@@ -232,29 +232,68 @@ def generate_video():
         
         return jsonify({"error": f"Error generating video: {str(e)}"}), 500
 
-@bp.route('/status/<job_id>', methods=['GET'])
-def get_video_status(job_id: str):
-    """Get the status of a video generation job."""
+@bp.route('/status/<job_id>', methods=['GET', 'OPTIONS'])
+def get_job_status(job_id):
+    """Get the status of a video generation job"""
+    from flask import request, jsonify, current_app
+    import redis
+    import json
+    
+    if request.method == 'OPTIONS':
+        # Handle preflight request explicitly
+        current_app.logger.debug(f"Handling OPTIONS request for /status/{job_id}")
+        response = jsonify({})
+        # Get the origin from the request
+        origin = request.headers.get('Origin')
+        # Add CORS headers
+        if origin:
+            response.headers.add('Access-Control-Allow-Origin', origin)
+        else:
+            response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        response.headers.add('Access-Control-Max-Age', '3600')
+        return response, 200
+    
     try:
-        job_data = current_app.redis_client.get(f"job:{job_id}:status")
-        if not job_data:
-            return jsonify({"status": "error", "message": "Job not found"}), 404
-            
-        job_info = json.loads(job_data)
-        return jsonify({
+        # Log request for debugging
+        current_app.logger.debug(f"Getting status for job ID: {job_id}")
+        
+        # Connect to Redis
+        redis_client = current_app.redis_client or redis.Redis.from_url(
+            current_app.config['REDIS_URL']
+        )
+        
+        # Check if job exists in Redis
+        job_key = f"job:{job_id}:status"
+        if not redis_client.exists(job_key):
+            return jsonify({
+                "status": "error", 
+                "message": f"No job found with ID {job_id}"
+            }), 404
+        
+        # Get job details
+        job_data = json.loads(redis_client.get(job_key))
+        
+        # Return response with appropriate CORS headers
+        response = jsonify({
             "status": "success",
-            "data": {
-                "status": job_info["status"],
-                "progress": job_info.get("progress", 0),
-                "video_url": job_info.get("video_url"),
-                "created_at": job_info["created_at"],
-                "updated_at": job_info["updated_at"],
-                "error": job_info.get("error")
-            }
-        }), 200
+            "data": job_data
+        })
+        
+        # Get the origin from the request
+        origin = request.headers.get('Origin')
+        
+        # Add CORS headers to ensure browsers can access this
+        if origin:
+            response.headers.add('Access-Control-Allow-Origin', origin)
+        else:
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            
+        return response
         
     except Exception as e:
-        logging.error(f"Error getting job status: {str(e)}")
+        current_app.logger.error(f"Error getting job status: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @bp.route('/cors-test', methods=['GET', 'OPTIONS'])
