@@ -112,22 +112,23 @@ class ImageStorageService:
             Optional[str]: Signed URL for the image if found
         """
         try:
-            # List blobs with prefix
+            # List blobs with prefix that includes the image ID
             blobs = self.client.list_blobs(
                 self.bucket_name,
-                prefix=self.image_folder
+                prefix=f"{self.image_folder}/**/{image_id}"
             )
             
-            # Find the image and generate signed URL
-            for blob in blobs:
-                # Check if the image ID is in the blob name
-                if image_id in blob.name:
-                    url = blob.generate_signed_url(
-                        version="v4",
-                        expiration=timedelta(days=1),
-                        method="GET"
-                    )
-                    return url
+            # Get the first matching blob
+            blob = next(blobs, None)
+            
+            if blob:
+                url = blob.generate_signed_url(
+                    version="v4",
+                    expiration=timedelta(days=1),
+                    method="GET"
+                )
+                logger.info(f"Found image {image_id} at {blob.name}")
+                return url
             
             logger.warning(f"No image found with ID {image_id}")
             return None

@@ -140,12 +140,16 @@ class VideoGenerator:
                 temp_files.extend(user_image_paths)
                 
                 if not user_image_paths:
-                    logger.warning("User provided image IDs but none could be fetched")
-            
-            # Fetch media assets (only if user didn't provide images or not enough were found)
-            media_assets = {'images': user_image_paths, 'videos': []}
-            
-            if not user_image_paths:
+                    error_msg = "Failed to fetch user-provided images"
+                    logger.error(error_msg)
+                    self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+                    raise Exception(error_msg)
+                
+                logger.info(f"Using {len(user_image_paths)} user-provided images")
+                media_assets = {'images': user_image_paths, 'videos': []}
+                self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
+            else:
+                # Only fetch from Unsplash if no user images were provided
                 self.update_job_status(redis_client, job_id, "media_fetching", progress=10)
                 logger.info(f"Fetching media assets for content: {request.content}")
                 media_assets = media_fetcher.fetch_media(request.content, duration=request.duration)
@@ -157,9 +161,6 @@ class VideoGenerator:
                     temp_files.extend(media_assets['images'])
                 if media_assets and 'videos' in media_assets:
                     temp_files.extend(media_assets['videos'])
-            else:
-                logger.info(f"Using {len(user_image_paths)} user-provided images")
-                self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
             
             if not media_assets or not media_assets.get('images'):
                 error_msg = "No media assets were fetched"
