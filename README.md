@@ -319,6 +319,40 @@ Response:
 }
 ```
 
+## Custom Image Upload for Video Generation
+
+This feature allows users to upload their own images to be used in video generation instead of relying solely on images fetched from APIs.
+
+### How it works
+
+1. Users upload images through the frontend interface (up to 3 images)
+2. Images are stored in Google Cloud Storage
+3. Video generation request includes the image IDs
+4. Backend retrieves the uploaded images and uses them for video creation
+
+### API Endpoints
+
+- `POST /api/video/upload-images`: Upload images (multipart/form-data)
+- `POST /api/video/generate`: Generate video with optional `user_image_ids` array
+
+### Troubleshooting
+
+If you encounter issues with video generation using custom images, you can use the debug script:
+
+```bash
+# Check a specific job
+python debug_video_generation.py --job_id <job_id>
+
+# View the last 5 jobs
+python debug_video_generation.py --last_jobs 5
+```
+
+Common issues:
+- Ensure image IDs are correctly passed to the generate endpoint
+- Check if the images were successfully uploaded
+- Verify the image format is supported (JPEG, PNG)
+- Confirm image sizes are within limits (max 2MB per image)
+
 ## Critical Dependencies
 
 ### NLTK Resources

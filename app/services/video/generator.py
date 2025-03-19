@@ -92,6 +92,8 @@ class VideoGenerator:
                     logger.warning(f"Could not find image with ID: {image_id}")
                     continue
                 
+                logger.info(f"Successfully got URL for image {image_id}: {image_url}")
+                
                 # Download the image to a local file
                 local_path = media_fetcher.download_file(image_url)
                 if local_path:
@@ -129,39 +131,50 @@ class VideoGenerator:
             # Update status to processing
             self.update_job_status(redis_client, job_id, "initialized", progress=0)
             
-            # Check if user provided custom images
-            user_image_paths = []
-            if hasattr(request, 'user_image_ids') and request.user_image_ids:
+            # Determine if we're using user-provided images
+            using_user_images = hasattr(request, 'user_image_ids') and request.user_image_ids and len(request.user_image_ids) > 0
+            
+            # Get media assets (either user-provided or from Unsplash)
+            if using_user_images:
+                logger.info(f"Using user-provided images: {request.user_image_ids}")
                 self.update_job_status(redis_client, job_id, "fetching_user_images", progress=5)
+                
+                # Fetch user images and create media assets object
                 user_image_paths = self.fetch_user_images(request.user_image_ids)
-                self.update_job_status(redis_client, job_id, "user_images_fetched", progress=10)
                 
                 # Track user image paths for cleanup
                 temp_files.extend(user_image_paths)
                 
                 if not user_image_paths:
-                    error_msg = "Failed to fetch user-provided images"
+                    error_msg = "Failed to fetch any user-provided images"
                     logger.error(error_msg)
                     self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                     raise Exception(error_msg)
                 
-                logger.info(f"Using {len(user_image_paths)} user-provided images")
+                logger.info(f"Successfully fetched {len(user_image_paths)} user images")
+                self.update_job_status(redis_client, job_id, "user_images_fetched", progress=10)
+                
+                # Create media assets object with user images
                 media_assets = {'images': user_image_paths, 'videos': []}
                 self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
+                
             else:
-                # Only fetch from Unsplash if no user images were provided
+                # Fall back to fetching media from Unsplash
+                logger.info(f"No user images provided, fetching media assets for content: {request.content}")
                 self.update_job_status(redis_client, job_id, "media_fetching", progress=10)
-                logger.info(f"Fetching media assets for content: {request.content}")
+                
                 media_assets = media_fetcher.fetch_media(request.content, duration=request.duration)
                 logger.info(f"Media assets fetched: {json.dumps(media_assets, indent=2)}")
-                self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
                 
                 # Track auto-generated media for cleanup
                 if media_assets and 'images' in media_assets:
                     temp_files.extend(media_assets['images'])
                 if media_assets and 'videos' in media_assets:
                     temp_files.extend(media_assets['videos'])
+                
+                self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
             
+            # Verify we have media assets to work with
             if not media_assets or not media_assets.get('images'):
                 error_msg = "No media assets were fetched"
                 logger.error(error_msg)

@@ -1,9 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
-from app.services.video.generator import VideoGenerator
-from app.models.video import VideoRequest
-from app.services.storage.file_validator import FileValidator
-from app.services.storage.image_storage import image_storage_service
-from app.models.image import ImageUploadResponse
+from ..services.video import VideoGenerator
+from ..models import VideoRequest, ImageUploadResponse
+from ..services.storage import FileValidator, image_storage_service
 import uuid
 import logging
 import json
@@ -114,17 +112,18 @@ def generate_video():
             level="info"
         )
         
-        # Check for content_analysis field and restructure if necessary
-        if "content_analysis" in request_data:
-            sentry_sdk.set_context("content_analysis", {
-                "original": request_data["content_analysis"]
-            })
-            sentry_sdk.add_breadcrumb(
-                category="video_generation",
-                message="Found content_analysis in request",
-                level="info"
-            )
-        
+        # Check for required fields
+        if not request_data.get("content"):
+            return jsonify({"error": "Content field is required"}), 400
+            
+        # Check if user_image_ids is provided but empty
+        if "user_image_ids" in request_data and not request_data["user_image_ids"]:
+            logging.warning("user_image_ids field is present but empty - will use API-generated images")
+            
+        # Check if user_image_ids contains valid IDs
+        if request_data.get("user_image_ids"):
+            logging.info(f"Video request includes {len(request_data['user_image_ids'])} custom images")
+            
         # Handle possible field mapping issues for backward compatibility
         try:
             # Ensure the request data conforms to the VideoRequest model
@@ -198,6 +197,9 @@ def generate_video():
             "updated_at": datetime.utcnow().isoformat()
         }
         redis_client.set(f"job:{job_id}:status", json.dumps(job_status))
+        
+        # Log job creation
+        logging.info(f"Created video generation job {job_id}, mode: {'custom images' if request_data.get('user_image_ids') else 'auto images'}")
         
         # Add breadcrumb for job creation
         sentry_sdk.add_breadcrumb(

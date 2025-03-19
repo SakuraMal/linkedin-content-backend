@@ -8,7 +8,7 @@ from google.cloud import storage
 from google.cloud.storage import Blob
 
 # Import the existing storage service
-from app.services.video.storage import StorageService
+from ..video.storage import StorageService
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,8 @@ class ImageStorageService:
                     'original_filename': original_filename,
                     'content_type': file.content_type,
                     'user_id': user_id or 'anonymous',
-                    'upload_date': datetime.now().isoformat()
+                    'upload_date': datetime.now().isoformat(),
+                    'image_id': image_id  # Store the image ID in metadata
                 }
                 blob.metadata = metadata
                 
@@ -112,52 +113,32 @@ class ImageStorageService:
             Optional[str]: Signed URL for the image if found
         """
         try:
-            # First try the direct approach - list recent images and find the matching one
-            # This is more efficient than listing all images in the bucket
-            today = datetime.now()
-            yesterday = today - timedelta(days=1)
+            # Use a specific prefix with the image ID to make search more efficient
+            prefix = f"{self.image_folder}/**/{image_id}"
             
-            # Try today and yesterday's folders first (most likely locations)
-            date_prefixes = [
-                today.strftime('%Y/%m/%d'),
-                yesterday.strftime('%Y/%m/%d')
-            ]
+            logger.info(f"Searching for image with ID: {image_id} using prefix: {prefix}")
             
-            for date_prefix in date_prefixes:
-                # Construct the path prefix for the date
-                prefix = f"{self.image_folder}/{date_prefix}"
-                blobs = self.client.list_blobs(
-                    self.bucket_name,
-                    prefix=prefix
-                )
-                
-                # Search for the image ID in the file name
-                for blob in blobs:
-                    if image_id in blob.name:
-                        url = blob.generate_signed_url(
-                            version="v4",
-                            expiration=timedelta(days=1),
-                            method="GET"
-                        )
-                        logger.info(f"Found image {image_id} at {blob.name}")
-                        return url
-            
-            # If not found in recent folders, try a more general search
+            # List blobs that might contain this image ID
             blobs = self.client.list_blobs(
                 self.bucket_name,
-                prefix=self.image_folder
+                prefix=self.image_folder  # Search in the entire user uploads folder
             )
             
-            # Find the first blob that contains the image ID
-            for blob in blobs:
-                if image_id in blob.name:
-                    url = blob.generate_signed_url(
-                        version="v4",
-                        expiration=timedelta(days=1),
-                        method="GET"
-                    )
-                    logger.info(f"Found image {image_id} at {blob.name}")
-                    return url
+            # Find the first blob that contains the image ID in its name or metadata
+            matching_blob = next((blob for blob in blobs if 
+                                 image_id in blob.name or
+                                 (blob.metadata and 'image_id' in blob.metadata and blob.metadata['image_id'] == image_id)), 
+                                None)
+            
+            if matching_blob:
+                # Generate a signed URL
+                url = matching_blob.generate_signed_url(
+                    version="v4",
+                    expiration=timedelta(days=1),
+                    method="GET"
+                )
+                logger.info(f"Found image {image_id} at {matching_blob.name}")
+                return url
             
             logger.warning(f"No image found with ID {image_id}")
             return None
