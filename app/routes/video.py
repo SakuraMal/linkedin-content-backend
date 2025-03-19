@@ -255,4 +255,36 @@ def get_video_status(job_id: str):
         
     except Exception as e:
         logging.error(f"Error getting job status: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)}), 500 
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@bp.route('/cors-test', methods=['GET', 'OPTIONS'])
+def cors_test():
+    """Test endpoint for CORS configuration"""
+    from flask import request, jsonify, current_app
+    
+    # Log request details for debugging
+    current_app.logger.debug(f"CORS test request received")
+    current_app.logger.debug(f"Request headers: {dict(request.headers)}")
+    current_app.logger.debug(f"Request method: {request.method}")
+    
+    # If this is an OPTIONS request, it will be handled by Flask-CORS
+    # Just return a successful response for GET
+    if request.method == 'GET':
+        response = jsonify({
+            "success": True,
+            "message": "CORS is configured correctly if you can see this message",
+            "request_headers": dict(request.headers),
+            "cors_settings": {
+                "allowed_origins": current_app.config.get('CORS_ORIGINS', 'http://localhost:3000').split(','),
+            }
+        })
+        
+        # Explicitly add CORS headers for debugging
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+        
+        return response
+    
+    # OPTIONS requests are handled by Flask-CORS, but add a fallback
+    return "", 204 

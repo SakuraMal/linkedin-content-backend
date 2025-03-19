@@ -31,10 +31,30 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     # Using both origins and resources parameters for broader compatibility
     CORS(app, 
          origins=allowed_origins,
-         resources={r"/*": {"origins": allowed_origins}},
-         supports_credentials=True,
-         allow_headers=['Content-Type', 'Authorization', 'Accept'],
-         methods=['GET', 'POST', 'OPTIONS'])
+         resources={
+             r"/*": {
+                 "origins": allowed_origins,
+                 "allow_headers": ["Content-Type", "Authorization", "Accept"],
+                 "expose_headers": ["Content-Type", "Authorization"],
+                 "supports_credentials": True,
+                 "max_age": 600,
+                 "send_wildcard": False,
+                 "automatic_options": True,
+                 "methods": ["GET", "POST", "OPTIONS"]
+             }
+         })
+
+    # Add after-request handler to ensure CORS headers are present
+    @app.after_request
+    def after_request(response):
+        # Get the origin from the request
+        origin = request.headers.get('Origin')
+        if origin and origin in allowed_origins:
+            response.headers.add('Access-Control-Allow-Origin', origin)
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept')
+            response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+            response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
 
     if test_config is None:
         app.config.from_mapping(
