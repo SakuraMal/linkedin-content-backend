@@ -1,194 +1,106 @@
 #!/usr/bin/env python3
 
 """
-Test script for custom image video generation
-
-This script helps test the end-to-end flow of:
-1. Uploading custom images
-2. Generating a video with those images
-3. Checking the status until completion
+Test script for generating videos with custom images.
+This script helps diagnose issues with the custom image video generation process.
 
 Usage:
-    python test_custom_images.py --images image1.jpg image2.jpg --content "Your video content here"
+    python test_custom_images.py --image_ids <id1> <id2> <id3>
 """
 
-import argparse
-import json
 import os
 import sys
+import json
 import time
-import requests
-from datetime import datetime
+import logging
+import argparse
+import traceback
+from redis import Redis
 
-# Configuration
-API_BASE_URL = os.environ.get('API_BASE_URL', 'http://localhost:5000/api')
-MAX_WAIT_TIME = 300  # Maximum wait time in seconds (5 minutes)
-POLL_INTERVAL = 5    # Status check interval in seconds
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
-def upload_images(image_paths):
-    """Upload images to the API and return the image IDs."""
-    print(f"Uploading {len(image_paths)} images...")
-    
-    # Prepare form data with images
-    files = []
-    for i, image_path in enumerate(image_paths):
-        if not os.path.exists(image_path):
-            print(f"Error: Image file not found: {image_path}")
-            sys.exit(1)
-            
-        files.append(('images', (os.path.basename(image_path), open(image_path, 'rb'), 'image/jpeg')))
-    
-    # Make upload request
-    try:
-        response = requests.post(
-            f"{API_BASE_URL}/video/upload-images",
-            files=files
-        )
-        
-        if response.status_code != 200:
-            print(f"Error uploading images: {response.text}")
-            sys.exit(1)
-        
-        result = response.json()
-        image_ids = result.get('image_ids', [])
-        
-        if not image_ids:
-            print("No image IDs were returned from the upload")
-            sys.exit(1)
-        
-        print(f"Successfully uploaded {len(image_ids)} images")
-        return image_ids
-        
-    except Exception as e:
-        print(f"Error during upload: {e}")
-        sys.exit(1)
+logger = logging.getLogger("custom_images_test")
 
-def generate_video(image_ids, content):
-    """Generate a video using the uploaded images."""
-    print(f"Generating video with {len(image_ids)} images...")
-    
-    # Prepare request payload
-    payload = {
-        "content": content,
-        "user_image_ids": image_ids,
-        "style": "professional",
-        "duration": 15,  # 15 seconds video
-        "voice": "en-US-Neural2-F"
-    }
-    
-    # Make generation request
-    try:
-        response = requests.post(
-            f"{API_BASE_URL}/video/generate",
-            json=payload
-        )
-        
-        if response.status_code != 200:
-            print(f"Error generating video: {response.text}")
-            sys.exit(1)
-        
-        result = response.json()
-        job_id = result.get('job_id')
-        
-        if not job_id:
-            print("No job ID was returned from the generation request")
-            sys.exit(1)
-        
-        print(f"Video generation started with job ID: {job_id}")
-        return job_id
-        
-    except Exception as e:
-        print(f"Error during video generation: {e}")
-        sys.exit(1)
-
-def check_job_status(job_id):
-    """Check the status of a video generation job."""
-    try:
-        response = requests.get(f"{API_BASE_URL}/video/status/{job_id}")
-        
-        if response.status_code != 200:
-            print(f"Error checking job status: {response.text}")
-            return None
-        
-        result = response.json()
-        
-        if result.get('status') != 'success':
-            print(f"Error in status response: {result}")
-            return None
-        
-        return result.get('data', {})
-        
-    except Exception as e:
-        print(f"Error checking status: {e}")
-        return None
-
-def wait_for_completion(job_id):
-    """Wait for job completion and show progress updates."""
-    print(f"Waiting for job {job_id} to complete...")
-    
-    start_time = time.time()
-    last_progress = -1
-    
-    while time.time() - start_time < MAX_WAIT_TIME:
-        job_data = check_job_status(job_id)
-        
-        if not job_data:
-            time.sleep(POLL_INTERVAL)
-            continue
-        
-        status = job_data.get('status')
-        progress = job_data.get('progress', 0)
-        
-        # Show progress update if changed
-        if progress != last_progress:
-            if status == 'failed':
-                print(f"Job failed: {job_data.get('error', 'Unknown error')}")
-                return None
-                
-            print(f"Status: {status} ({progress}%)")
-            last_progress = progress
-        
-        # Check if complete
-        if status == 'completed':
-            video_url = job_data.get('video_url')
-            print(f"Video generation completed in {int(time.time() - start_time)} seconds!")
-            print(f"Video URL: {video_url}")
-            return video_url
-            
-        # Wait before checking again
-        time.sleep(POLL_INTERVAL)
-    
-    print(f"Timeout waiting for job completion after {MAX_WAIT_TIME} seconds")
-    return None
+def setup_args():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='Test video generation with custom images')
+    parser.add_argument('--image_ids', type=str, nargs='+', required=True, 
+                      help='Image IDs to use for the video (required)')
+    parser.add_argument('--text', type=str, 
+                      default="This is a test video using custom images. We're testing the video generation process with user-uploaded images.", 
+                      help='Text content for the video')
+    parser.add_argument('--duration', type=int, default=15, help='Video duration in seconds')
+    parser.add_argument('--style', type=str, default='professional', help='Video style')
+    return parser.parse_args()
 
 def main():
-    parser = argparse.ArgumentParser(description='Test custom image video generation')
-    parser.add_argument('--images', nargs='+', required=True, help='Paths to image files')
-    parser.add_argument('--content', required=True, help='Content for the video narration')
+    """Main execution function"""
+    args = setup_args()
     
-    args = parser.parse_args()
+    if not args.image_ids:
+        logger.error("No image IDs provided. Use --image_ids to specify one or more image IDs.")
+        sys.exit(1)
     
-    if len(args.images) > 3:
-        print("Warning: Maximum 3 images supported, using the first 3 only")
-        args.images = args.images[:3]
+    logger.info(f"Testing video generation with {len(args.image_ids)} custom images")
+    logger.info(f"Image IDs: {args.image_ids}")
     
-    # Run the end-to-end test flow
-    print("\n=== CUSTOM IMAGE VIDEO GENERATION TEST ===\n")
-    print(f"Content: {args.content}")
-    print(f"Images: {', '.join(args.images)}")
-    print("")
+    # Import where needed to avoid circular imports
+    from app.models.video import VideoGenerationRequest
+    from app.services.video.generator import VideoGenerator
+    import uuid
     
-    # Step 1: Upload images
-    image_ids = upload_images(args.images)
-    print(f"Image IDs: {image_ids}")
-    print("")
+    # Create a unique job ID
+    job_id = str(uuid.uuid4())
+    logger.info(f"Created test job ID: {job_id}")
     
-    # Step 2: Generate video
-    job_id = generate_video(image_ids, args.content)
-    print("")
+    # Connect to Redis
+    redis_client = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
     
-    # Step 3: Wait for completion
-    wait_for_completion(job_id)
+    # Initialize video generator
+    video_generator = VideoGenerator()
+    
+    # Create video request
+    request = VideoGenerationRequest(
+        content=args.text,
+        style=args.style,
+        duration=args.duration,
+        user_image_ids=args.image_ids
+    )
+    
+    logger.info(f"Video request: {json.dumps(request.model_dump(), indent=2)}")
+    
+    start_time = time.time()
+    
+    try:
+        # Generate video
+        logger.info("Starting video generation process")
+        video_url = video_generator.process_video(job_id, request, redis_client)
+        
+        # Calculate duration
+        duration = time.time() - start_time
+        
+        logger.info(f"Video generation completed in {duration:.2f} seconds")
+        logger.info(f"Video URL: {video_url}")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error generating video: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Calculate duration
+        duration = time.time() - start_time
+        logger.info(f"Video generation failed after {duration:.2f} seconds")
+        
+        return False
 
 if __name__ == "__main__":
-    main() 
+    success = main()
+    if not success:
+        sys.exit(1) 

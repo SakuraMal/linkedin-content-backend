@@ -26,10 +26,14 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     default_origins = 'http://localhost:3000,https://linkedin-content-frontend.vercel.app'
     allowed_origins = os.environ.get('CORS_ORIGINS', default_origins).split(',')
     logger.info(f"Configuring CORS with allowed origins: {allowed_origins}")
+    
+    # Configure CORS to work both with preflight requests and regular requests
+    # Using both origins and resources parameters for broader compatibility
     CORS(app, 
          origins=allowed_origins,
+         resources={r"/*": {"origins": allowed_origins}},
          supports_credentials=True,
-         allow_headers=['Content-Type', 'Authorization'],
+         allow_headers=['Content-Type', 'Authorization', 'Accept'],
          methods=['GET', 'POST', 'OPTIONS'])
 
     if test_config is None:

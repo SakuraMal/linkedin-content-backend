@@ -14,6 +14,8 @@ import traceback
 import math
 import os
 import shutil
+import tempfile
+import psutil
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
@@ -125,6 +127,10 @@ class VideoGenerator:
         temp_files = []  # Track temporary files for cleanup
         
         try:
+            # Log current memory usage at start
+            process = psutil.Process()
+            logger.info(f"Starting video job. Memory usage: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+            
             logger.info(f"Starting video generation for job {job_id}")
             logger.info(f"Request data: {request.model_dump_json()}")
             
@@ -133,6 +139,9 @@ class VideoGenerator:
             
             # Determine if we're using user-provided images
             using_user_images = hasattr(request, 'user_image_ids') and request.user_image_ids and len(request.user_image_ids) > 0
+            
+            # Monitor memory usage before fetching images
+            logger.info(f"Memory before fetching images: {process.memory_info().rss / 1024 / 1024:.2f} MB")
             
             # Get media assets (either user-provided or from Unsplash)
             if using_user_images:
@@ -174,6 +183,9 @@ class VideoGenerator:
                 
                 self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
             
+            # Monitor memory usage after fetching images
+            logger.info(f"Memory after fetching images: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+            
             # Verify we have media assets to work with
             if not media_assets or not media_assets.get('images'):
                 error_msg = "No media assets were fetched"
@@ -190,6 +202,9 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
             logger.info("Text processed successfully")
+            
+            # Monitor memory usage before audio generation
+            logger.info(f"Memory before audio generation: {process.memory_info().rss / 1024 / 1024:.2f} MB")
             
             # Generate audio with processed text
             self.update_job_status(redis_client, job_id, "audio_generating", progress=30)
@@ -221,6 +236,9 @@ class VideoGenerator:
                 error_msg = "Failed to generate audio file - check logs for detailed error"
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
+            
+            # Monitor memory usage after audio generation
+            logger.info(f"Memory after audio generation: {process.memory_info().rss / 1024 / 1024:.2f} MB")
             
             # Process media
             self.update_job_status(redis_client, job_id, "processing_media", progress=50)
@@ -295,31 +313,52 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
             
-            # Upload to storage
-            self.update_job_status(redis_client, job_id, "uploading", progress=90)
+            # Monitor memory before final video upload
+            logger.info(f"Memory before video upload: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+            
+            # Upload video with more detailed error handling
             logger.info(f"Uploading video to storage: {final_video}")
-            video_url = storage_service.upload_video(final_video, job_id)
-            logger.info(f"Video uploaded: {video_url}")
+            self.update_job_status(redis_client, job_id, "uploading", progress=90)
             
-            if not video_url:
-                error_msg = "Failed to upload video to storage"
+            try:
+                video_url = storage_service.upload_video(final_video, job_id)
+                logger.info(f"Video uploaded: {video_url}")
+                
+                if not video_url:
+                    error_msg = "Failed to upload video to storage - empty URL returned"
+                    logger.error(error_msg)
+                    self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+                    raise Exception(error_msg)
+                
+                # Monitor memory after successful upload
+                logger.info(f"Memory after successful upload: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+                
+                # Update final status
+                self.update_job_status(redis_client, job_id, "completed", progress=100, video_url=video_url)
+                logger.info("Video generation completed successfully")
+                
+                # Clean up temporary files
+                self.cleanup_temp_files(temp_files)
+                
+                return video_url
+            except Exception as upload_error:
+                error_msg = f"Error uploading video: {str(upload_error)}"
                 logger.error(error_msg)
+                logger.error(f"Upload error traceback: {traceback.format_exc()}")
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
-                raise Exception(error_msg)
-            
-            # Update final status
-            self.update_job_status(redis_client, job_id, "completed", progress=100, video_url=video_url)
-            logger.info("Video generation completed successfully")
-            
-            # Clean up temporary files
-            self.cleanup_temp_files(temp_files)
-            
-            return video_url
+                raise
             
         except Exception as e:
             error_msg = f"Error generating video: {str(e)}"
             logger.error(error_msg)
             logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            # Log memory usage on error
+            try:
+                logger.error(f"Memory usage at error: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+            except:
+                pass
+                
             self.update_job_status(redis_client, job_id, "failed", error=error_msg)
             
             # Clean up temporary files even on error

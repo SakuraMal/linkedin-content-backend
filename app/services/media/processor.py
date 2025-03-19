@@ -11,6 +11,8 @@ import tempfile
 import numpy as np
 import math
 from ...models.video import VideoStyle, TransitionStyle
+import traceback
+import psutil
 
 # Prevent truncated images
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -324,52 +326,85 @@ class MediaProcessor:
             logger.error(f"Error creating video segments: {str(e)}")
             raise
 
-    def combine_with_audio(self, video_clips: List[Union[ImageClip, VideoFileClip]], audio_path: str) -> str:
+    def combine_with_audio(self, video_clips: List[Union[ImageClip, VideoFileClip]], audio_path: str) -> Optional[str]:
         """
-        Combine video segments with audio into final video.
+        Combine video clips with audio into a final video.
         
         Args:
             video_clips: List of processed video clips
             audio_path: Path to the audio file
             
         Returns:
-            str: Path to the final video file
+            str: Path to the final video, or None if an error occurred
         """
         try:
+            logger.info(f"Combining {len(video_clips)} video clips with audio")
+            
+            # Memory usage before processing
+            process = psutil.Process()
+            logger.info(f"Memory usage before combining: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+            
             # Create composite video with sequential clips
+            logger.info(f"Creating composite video from {len(video_clips)} clips")
             final_video = CompositeVideoClip(video_clips, size=self.target_resolution)
             
-            # Add audio
-            audio = self.process_audio(audio_path)
+            # Memory usage after creating composite
+            logger.info(f"Memory usage after creating composite: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+            
+            # Process audio
+            logger.info(f"Processing audio file: {audio_path}")
+            audio = AudioFileClip(audio_path)
             
             # Ensure audio duration matches video duration
             if audio.duration > final_video.duration:
+                logger.info(f"Trimming audio from {audio.duration}s to {final_video.duration}s")
                 audio = audio.set_duration(final_video.duration)
+                
+            # Add audio to video
             final_video = final_video.set_audio(audio)
             
-            # Export final video with LinkedIn-optimized settings
+            # Prepare output path
             output_path = os.path.join(self.temp_dir, 'final_video.mp4')
+            logger.info(f"Writing video to: {output_path}")
+            
+            # Memory usage before rendering
+            logger.info(f"Memory usage before rendering: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+            
+            # Write video file with reduced quality settings for better performance
             final_video.write_videofile(
                 output_path,
-                fps=30,  # LinkedIn recommended
+                fps=24,  # Reduced from 30 to save resources
                 codec='libx264',
                 audio_codec='aac',
-                audio_bitrate='192k',  # LinkedIn recommended
-                bitrate='8000k',  # High quality for LinkedIn
+                audio_bitrate='128k',  # Reduced from 192k
+                bitrate='5000k',  # Reduced from 8000k
                 temp_audiofile=os.path.join(self.temp_dir, 'temp_audio.m4a'),
-                remove_temp=True
+                remove_temp=True,
+                threads=2  # Limit threads to avoid memory issues
             )
+            
+            # Memory usage after rendering
+            logger.info(f"Memory usage after rendering: {process.memory_info().rss / 1024 / 1024:.2f} MB")
             
             logger.info(f"Successfully created video: {output_path}")
             return output_path
             
         except Exception as e:
             logger.error(f"Error combining video with audio: {str(e)}")
-            raise
+            logger.error(f"Detailed error: {traceback.format_exc()}")
+            
+            # Log memory usage on error
+            try:
+                process = psutil.Process()
+                logger.error(f"Memory usage at error: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+            except:
+                pass
+                
+            return None
         finally:
-            # Clean up clips
-            for clip in video_clips:
-                clip.close()
+            # We don't close clips here because they were passed in from outside
+            # The caller is responsible for closing them
+            pass
 
     def cleanup(self):
         """Remove all temporary files."""
