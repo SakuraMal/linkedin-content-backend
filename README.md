@@ -331,3 +331,15 @@ The application relies on specific NLTK resources for text analysis and content 
 - Troubleshooting steps
 
 **Important:** Always verify NLTK resources during deployment to prevent service disruptions.
+
+## Known Issues and Recent Fixes
+
+The service has a documented list of known issues, workarounds, and recently implemented fixes. 
+Please refer to [Known Issues](./KNOWN_ISSUES.md) for detailed information about:
+
+- Current known issues and their status
+- Recently implemented fixes pending verification
+- Planned enhancements
+- Workarounds for existing issues
+
+Reviewing this document is essential when troubleshooting problems or deploying updates.

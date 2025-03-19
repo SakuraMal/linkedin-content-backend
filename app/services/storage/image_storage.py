@@ -112,23 +112,52 @@ class ImageStorageService:
             Optional[str]: Signed URL for the image if found
         """
         try:
-            # List blobs with prefix that includes the image ID
+            # First try the direct approach - list recent images and find the matching one
+            # This is more efficient than listing all images in the bucket
+            today = datetime.now()
+            yesterday = today - timedelta(days=1)
+            
+            # Try today and yesterday's folders first (most likely locations)
+            date_prefixes = [
+                today.strftime('%Y/%m/%d'),
+                yesterday.strftime('%Y/%m/%d')
+            ]
+            
+            for date_prefix in date_prefixes:
+                # Construct the path prefix for the date
+                prefix = f"{self.image_folder}/{date_prefix}"
+                blobs = self.client.list_blobs(
+                    self.bucket_name,
+                    prefix=prefix
+                )
+                
+                # Search for the image ID in the file name
+                for blob in blobs:
+                    if image_id in blob.name:
+                        url = blob.generate_signed_url(
+                            version="v4",
+                            expiration=timedelta(days=1),
+                            method="GET"
+                        )
+                        logger.info(f"Found image {image_id} at {blob.name}")
+                        return url
+            
+            # If not found in recent folders, try a more general search
             blobs = self.client.list_blobs(
                 self.bucket_name,
-                prefix=f"{self.image_folder}/**/{image_id}"
+                prefix=self.image_folder
             )
             
-            # Get the first matching blob
-            blob = next(blobs, None)
-            
-            if blob:
-                url = blob.generate_signed_url(
-                    version="v4",
-                    expiration=timedelta(days=1),
-                    method="GET"
-                )
-                logger.info(f"Found image {image_id} at {blob.name}")
-                return url
+            # Find the first blob that contains the image ID
+            for blob in blobs:
+                if image_id in blob.name:
+                    url = blob.generate_signed_url(
+                        version="v4",
+                        expiration=timedelta(days=1),
+                        method="GET"
+                    )
+                    logger.info(f"Found image {image_id} at {blob.name}")
+                    return url
             
             logger.warning(f"No image found with ID {image_id}")
             return None

@@ -476,4 +476,57 @@ class VideoRequest(BaseModel):
 2. Scan uploaded files for malware.
 3. Validate file content beyond just MIME type.
 4. Use signed URLs with short expiration times.
-5. Implement proper access controls for the storage bucket. 
+5. Implement proper access controls for the storage bucket.
+
+## Recent Updates and Fixed Issues
+
+### Custom Image Handling Fixes (March 2024)
+
+#### Identified Issues
+
+1. **Generator Logic Inconsistency**:
+   - The `generate_video` method in `app/services/video/generator.py` was attempting to fetch media assets from Unsplash even when user images were provided but could not be fetched.
+   - This behavior contradicted the documented functionality, which states that only user-uploaded images should be used when available.
+   - The code would fall back to Unsplash images if user images were provided but couldn't be fetched, rather than failing with a clear error message.
+
+2. **Inefficient Image URL Retrieval**:
+   - The `get_image_url` method in `app/services/storage/image_storage.py` was inefficiently listing all blobs in the storage folder to find a specific image.
+   - This approach could lead to timeouts and performance issues as the number of stored images grows.
+
+#### Implemented Fixes
+
+1. **Generator Fixes (Video Generation Logic)**:
+   - Modified the video generation logic to strictly follow the behavior of only using user-uploaded images when provided.
+   - Added explicit error handling and status updates when user images cannot be fetched.
+   - Removed the fallback to Unsplash when user-provided images fail to load, instead failing with a clear error message.
+   - Implemented clearer code structure using an if/else pattern to explicitly choose between user images and Unsplash images.
+
+2. **Storage Service Fixes (Image Retrieval)**:
+   - Improved the `get_image_url` method to use a more specific prefix that includes the image ID.
+   - Implemented `next(blobs, None)` to efficiently retrieve the first matching blob without iterating through all blobs.
+   - Added more detailed logging for both successful and unsuccessful image retrieval attempts.
+   - Enhanced error handling for exceptions during the URL retrieval process.
+
+#### Benefits of Changes
+
+1. **For Video Generation**:
+   - More predictable behavior: if user uploads images, only those images will be used.
+   - Clearer error handling: descriptive error messages when user images cannot be fetched.
+   - Better adherence to documented functionality.
+
+2. **For Image Retrieval**:
+   - Faster image URL retrieval due to more specific blob filtering.
+   - Reduced memory usage by eliminating full blob list iteration.
+   - Enhanced logging for better debugging and diagnostics.
+   - More scalable solution as the number of stored images grows.
+
+#### Remaining Work (Pending Testing)
+
+While the fixes address the identified issues, thorough testing is required to confirm:
+
+1. User-uploaded images are correctly used in video generation.
+2. Appropriate error messages are displayed when user images cannot be fetched.
+3. Performance improvements in image URL retrieval with larger datasets.
+4. Proper cleanup of resources in all scenarios.
+
+_Note: These fixes have been deployed but should be considered provisional until verified through complete testing._ 
