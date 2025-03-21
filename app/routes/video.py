@@ -239,21 +239,10 @@ def get_job_status(job_id):
     import redis
     import json
     
+    # If this is an OPTIONS request, it will be handled by our after_request handler
     if request.method == 'OPTIONS':
-        # Handle preflight request explicitly
-        current_app.logger.debug(f"Handling OPTIONS request for /status/{job_id}")
-        response = jsonify({})
-        # Get the origin from the request
-        origin = request.headers.get('Origin')
-        # Add CORS headers - explicitly matching documented working configuration
-        if origin:
-            response.headers.add('Access-Control-Allow-Origin', origin)
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        if origin:
-            # Only add this when origin is present, as it doesn't make sense otherwise
-            response.headers.add('Access-Control-Allow-Credentials', 'true')
-        return response, 200
+        # We're just returning an empty response - headers will be added by after_request
+        return "", 204
     
     try:
         # Log request for debugging
@@ -275,21 +264,11 @@ def get_job_status(job_id):
         # Get job details
         job_data = json.loads(redis_client.get(job_key))
         
-        # Return response with appropriate CORS headers
-        response = jsonify({
+        # Return response (CORS headers will be added by after_request)
+        return jsonify({
             "status": "success",
             "data": job_data
         })
-        
-        # Get the origin from the request
-        origin = request.headers.get('Origin')
-        
-        # Add explicit CORS headers matching the documented working configuration
-        if origin:
-            response.headers.add('Access-Control-Allow-Origin', origin)
-            response.headers.add('Access-Control-Allow-Credentials', 'true')
-            
-        return response
         
     except Exception as e:
         current_app.logger.error(f"Error getting job status: {str(e)}")
@@ -305,27 +284,20 @@ def cors_test():
     current_app.logger.debug(f"Request headers: {dict(request.headers)}")
     current_app.logger.debug(f"Request method: {request.method}")
     
-    # If this is an OPTIONS request, it will be handled by Flask-CORS
-    # Just return a successful response for GET
-    if request.method == 'GET':
-        response = jsonify({
-            "success": True,
-            "message": "CORS is configured correctly if you can see this message",
-            "request_headers": dict(request.headers),
-            "cors_settings": {
-                "allowed_origins": current_app.config.get('CORS_ORIGINS', 'http://localhost:3000').split(','),
-            }
-        })
-        
-        # Explicitly add CORS headers matching documentation
-        origin = request.headers.get('Origin')
-        if origin:
-            response.headers.add('Access-Control-Allow-Origin', origin)
-            response.headers.add('Access-Control-Allow-Credentials', 'true')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        
-        return response
+    # If this is an OPTIONS request, it will be handled by our after_request handler
+    if request.method == 'OPTIONS':
+        # We're just returning an empty response - headers will be added by after_request
+        return "", 204
     
-    # OPTIONS requests are handled by Flask-CORS, but add a fallback
-    return "", 204 
+    # For GET requests, return a simple success response
+    # The after_request handler will add the necessary CORS headers
+    return jsonify({
+        "success": True,
+        "message": "CORS is configured correctly if you can see this message",
+        "request_info": {
+            "method": request.method,
+            "headers": dict(request.headers),
+            "origin": request.headers.get('Origin'),
+            "path": request.path
+        }
+    }) 

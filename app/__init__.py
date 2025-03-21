@@ -27,39 +27,39 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     allowed_origins = os.environ.get('CORS_ORIGINS', default_origins).split(',')
     logger.info(f"Configuring CORS with allowed origins: {allowed_origins}")
 
-    # Configure CORS with the exact configuration from docs/CORS.md
-    CORS(app, 
-         resources={r"/*": {"origins": allowed_origins}},
-         supports_credentials=True,
-         automatic_options=True)
+    # SimpleCORS approach: We'll handle everything in after_request
+    # We won't rely on Flask-CORS for OPTIONS requests
+    
+    # Remove the CORS middleware completely - it's causing conflicts
+    # CORS(app, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
 
-    # Handle OPTIONS requests explicitly for all routes
-    @app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
-    @app.route('/<path:path>', methods=['OPTIONS'])
-    def options_handler(path):
-        response = app.make_default_options_response()
-        origin = request.headers.get('Origin')
-        if origin and origin in allowed_origins:
-            response.headers.add('Access-Control-Allow-Origin', origin)
-            response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-            response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-            response.headers.add('Access-Control-Allow-Credentials', 'true')
-        return response
-
-    # Keep this after-request handler for additional CORS header insurance
+    # Remove custom OPTIONS routes - we'll handle all CORS in after_request
+    
+    # Handle all CORS in a single after_request handler
     @app.after_request
-    def after_request(response):
+    def handle_cors(response):
+        if request.method == 'OPTIONS':
+            # Handle preflight requests
+            response = app.make_default_options_response()
+        
+        # Get the origin of the request
         origin = request.headers.get('Origin')
+        
+        # Only add CORS headers if the origin is allowed
         if origin and origin in allowed_origins:
+            # Set CORS headers
             response.headers['Access-Control-Allow-Origin'] = origin
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
             response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Max-Age'] = '3600'  # Cache preflight for 1 hour
             
-            # Specific handling for preflight requests
-            if request.method == 'OPTIONS':
-                # Ensure OPTIONS responses get the right headers
-                response.headers['Access-Control-Max-Age'] = '3600'  # Cache preflight for 1 hour
+            # Add Vary header to signal that the response varies based on Origin
+            response.headers['Vary'] = 'Origin'
+            
+            # Log for debugging
+            logger.debug(f"Added CORS headers for origin: {origin}")
+            
         return response
 
     if test_config is None:
