@@ -38,9 +38,9 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     # Handle all CORS in a single after_request handler
     @app.after_request
     def handle_cors(response):
-        if request.method == 'OPTIONS':
-            # Handle preflight requests
-            response = app.make_default_options_response()
+        # Skip CORS handling for health check route
+        if request.path == '/health':
+            return response
         
         # Get the origin of the request
         origin = request.headers.get('Origin')
@@ -58,8 +58,15 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
             response.headers['Vary'] = 'Origin'
             
             # Log for debugging
-            logger.debug(f"Added CORS headers for origin: {origin}")
+            logger.debug(f"Added CORS headers for origin: {origin}, path: {request.path}, method: {request.method}")
             
+        return response
+        
+    # Explicitly handle OPTIONS for routes that need CORS
+    @app.route('/api/<path:path>', methods=['OPTIONS'])
+    def handle_api_options(path):
+        response = app.make_default_options_response()
+        # CORS headers will be added by the after_request handler
         return response
 
     if test_config is None:
