@@ -29,10 +29,8 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
 
     # Configure CORS with the exact configuration from docs/CORS.md
     CORS(app, 
-         origins=allowed_origins,
-         supports_credentials=True,
-         allow_headers=['Content-Type', 'Authorization'],
-         methods=['GET', 'POST', 'OPTIONS'])
+         resources={r"/*": {"origins": allowed_origins}},
+         supports_credentials=True)
 
     # Keep this after-request handler for additional CORS header insurance
     @app.after_request
@@ -40,7 +38,7 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
         origin = request.headers.get('Origin')
         if origin and origin in allowed_origins:
             response.headers.add('Access-Control-Allow-Origin', origin)
-            response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
             response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
             response.headers.add('Access-Control-Allow-Credentials', 'true')
         return response
