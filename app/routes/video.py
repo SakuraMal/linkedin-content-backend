@@ -239,10 +239,8 @@ def get_job_status(job_id):
     import redis
     import json
     
-    # If this is an OPTIONS request, it will be handled by our after_request handler
-    if request.method == 'OPTIONS':
-        # We're just returning an empty response - headers will be added by after_request
-        return "", 204
+    # Let the Flask-CORS middleware handle OPTIONS requests
+    # No need for custom handling
     
     try:
         # Log request for debugging
@@ -264,7 +262,7 @@ def get_job_status(job_id):
         # Get job details
         job_data = json.loads(redis_client.get(job_key))
         
-        # Return response (CORS headers will be added by after_request)
+        # Return response (CORS headers will be added by Flask-CORS middleware)
         return jsonify({
             "status": "success",
             "data": job_data
@@ -284,13 +282,11 @@ def cors_test():
     current_app.logger.debug(f"Request headers: {dict(request.headers)}")
     current_app.logger.debug(f"Request method: {request.method}")
     
-    # If this is an OPTIONS request, it will be handled by our after_request handler
-    if request.method == 'OPTIONS':
-        # We're just returning an empty response - headers will be added by after_request
-        return "", 204
+    # Let the Flask-CORS middleware handle OPTIONS requests
+    # No need for custom handling
     
     # For GET requests, return a simple success response
-    # The after_request handler will add the necessary CORS headers
+    # CORS headers will be added by Flask-CORS middleware
     return jsonify({
         "success": True,
         "message": "CORS is configured correctly if you can see this message",
