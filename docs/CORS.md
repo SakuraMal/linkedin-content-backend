@@ -1,60 +1,114 @@
 # CORS Configuration Documentation
-*Last updated: March 13, 2025, 15:24 UTC*
+*Last updated: March 21, 2025, 15:20 UTC*
 
-## Working Configuration
+## ✅ FINAL WORKING CONFIGURATION
 
-The following CORS configuration has been tested and confirmed working for both preflight requests and actual API calls:
+After extensive testing, the following CORS configuration has been confirmed as the most reliable solution for our application:
 
 ```python
 from flask import Flask
 from flask_cors import CORS
+import os
 
 app = Flask(__name__)
 
-# CORS configuration
-allowed_origins = os.environ.get('CORS_ORIGINS', 'http://localhost:3000').split(',')
+# CORS configuration - SIMPLE AND RELIABLE
+allowed_origins = os.environ.get('CORS_ORIGINS', 'http://localhost:3000,https://linkedin-content-frontend.vercel.app').split(',')
 CORS(app, 
-     origins=allowed_origins,
+     origins=allowed_origins,  # Direct parameter works with Flask-CORS 4.0.0
      supports_credentials=True,
      allow_headers=['Content-Type', 'Authorization'],
      methods=['GET', 'POST', 'OPTIONS'])
 ```
 
-## Key Points
+### Important Requirements:
+1. You MUST use Flask-CORS version 4.0.0 (check requirements.txt)
+2. Initialize CORS BEFORE registering any blueprints
+3. Use direct parameters instead of complex nested structures
 
-1. **Order of Operations**
-   - CORS must be initialized BEFORE registering any blueprints
-   - CORS must be initialized BEFORE defining any routes
+## 🔑 Key Changes That Solved Our Issues
 
-2. **Environment Variables**
-   - `CORS_ORIGINS`: Comma-separated list of allowed origins (e.g., `http://localhost:3000,https://your-production-domain.com`)
+1. **Simpler CORS Configuration**:
+   - We moved away from complex configurations with nested resources dictionaries
+   - We use direct parameters which are more reliable with Flask-CORS 4.0.0
+   - We eliminated custom handlers that were causing conflicts
 
-3. **Required Headers**
-   - `Content-Type`
-   - `Authorization`
+2. **API Response Format Consistency**:
+   - Backend uses `{"status": "success", "data": {...}}` format
+   - Frontend must check for `data.status === "success"` (NOT `data.success`)
 
-4. **Allowed Methods**
-   - GET
-   - POST
-   - OPTIONS (for preflight requests)
+3. **Version Consistency**:
+   - Locked Flask-CORS to version 4.0.0 in requirements.txt
+   - This version has more reliable defaults for our use case
+
+## 🚨 Frontend Implementation Notes
+
+The frontend must check for the correct response format:
+
+```javascript
+// CORRECT way to check response status
+const response = await fetch(`https://linkedin-content-backend.fly.dev/api/video/status/${jobId}`);
+const data = await response.json();
+
+if (data.status === "success") {  // NOT data.success
+  // Access actual status in data.data.status
+  const videoStatus = data.data.status;
+  
+  if (data.data.video_url) {
+    // Video is ready
+  }
+}
+```
+
+Common mistake that caused polling issues:
+```javascript
+// INCORRECT - our API returns status:"success", not success:true
+if (data.success) {  // This was wrong!
+  // ...
+}
+```
+
+## API Response Format
+
+All API endpoints return responses in this format:
+
+```json
+{
+  "status": "success",  // or "error"
+  "data": {
+    // Response data including:
+    "status": "completed",  // or "queued", "processing", "failed"
+    "video_url": "https://..."
+  }
+}
+```
+
+## Environment Variables
+
+Make sure these environment variables are set in your deployment:
+
+```
+CORS_ORIGINS=http://localhost:3000,https://linkedin-content-frontend.vercel.app
+```
+
+Add any additional frontend domains as needed, separated by commas.
 
 ## Testing CORS Configuration
 
-You can test if CORS is working correctly using the following curl commands:
+Use our dedicated test endpoint to verify CORS is working:
+
+```
+https://linkedin-content-backend.fly.dev/api/video/cors-test
+```
+
+You can also use this curl command:
 
 ```bash
-# Test preflight request (OPTIONS)
 curl -X OPTIONS -i \
   -H "Origin: http://localhost:3000" \
   -H "Access-Control-Request-Method: POST" \
   -H "Access-Control-Request-Headers: Content-Type" \
-  https://your-api-domain.com/your-endpoint
-
-# Test actual request (POST)
-curl -X POST \
-  -H "Origin: http://localhost:3000" \
-  -H "Content-Type: application/json" \
-  https://your-api-domain.com/your-endpoint
+  https://linkedin-content-backend.fly.dev/api/video/status/test
 ```
 
 ## Expected Response Headers
@@ -64,47 +118,35 @@ A properly configured CORS response should include these headers:
 ```
 access-control-allow-origin: http://localhost:3000
 access-control-allow-headers: Content-Type, Authorization
-access-control-allow-methods: DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT
+access-control-allow-methods: GET, POST, OPTIONS
+access-control-allow-credentials: true
 vary: Origin
 ```
 
-## Common Issues and Solutions
+## Common CORS Issues
 
-1. **Missing CORS Headers**
-   - Ensure CORS is initialized before routes and blueprints
-   - Check if any middleware is stripping headers
-   - Verify environment variables are set correctly
+1. **Frontend/Backend Format Mismatch**:
+   - The most common issue was the frontend checking for `data.success` when the API returns `"status": "success"`
+   - Always check the exact response format in browser dev tools
 
-2. **Preflight Failures**
-   - Ensure OPTIONS method is allowed
-   - Check that all required headers are in `allow_headers`
-   - Verify origin is in allowed origins list
+2. **Inconsistent Versions**:
+   - Different versions of Flask-CORS handle parameters differently
+   - We've locked to version 4.0.0 which works reliably with our configuration
 
-3. **Production Issues**
-   - Double-check `CORS_ORIGINS` environment variable in production
-   - Ensure all necessary domains are included in allowed origins
-   - Verify that load balancers/proxies are not stripping CORS headers
+3. **Custom Handlers Interference**:
+   - Custom OPTIONS handlers and after_request hooks can interfere with Flask-CORS
+   - Our final solution removes these in favor of simple middleware configuration
 
-## Implementation Notes
+4. **Environment Variables**:
+   - Ensure CORS_ORIGINS includes all frontend domains
+   - Localhost testing requires http://localhost:3000 in the allowed origins
 
-1. The configuration uses `supports_credentials=True` to allow authenticated requests
-2. Origins are configured via environment variables for flexibility across environments
-3. The `vary: Origin` header is automatically added to help with caching
+## Implementation History
 
-## Testing Endpoint
+After extensive troubleshooting, we tried several approaches:
+1. ❌ Custom OPTIONS route handlers with explicit header addition
+2. ❌ After-request handlers with origin checking
+3. ❌ Complex nested resources configuration
+4. ✅ Simple direct parameter configuration with Flask-CORS 4.0.0
 
-A test endpoint is available at `/api/test/test-cors` to verify CORS functionality:
-
-```python
-@test_bp.route('/test-cors', methods=['POST', 'OPTIONS'])
-@cross_origin()
-def test_cors():
-    return jsonify({
-        "status": "success",
-        "message": "CORS test successful",
-        "data": {
-            "received": True,
-            "cors_enabled": True
-        }
-    }), 200
-``` 
+The simplest approach proved to be the most reliable.
