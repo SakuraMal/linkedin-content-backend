@@ -15,12 +15,44 @@ logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
 class MediaFetcher:
     def __init__(self):
         """Initialize the MediaFetcher service."""
-        self.temp_dir = tempfile.mkdtemp(prefix='media_')
+        # Fix for fly.io: ensure we use a writable directory
+        try:
+            # First try using the standard temp directory
+            self.temp_dir = tempfile.mkdtemp(prefix='media_')
+            logger.debug(f"Created temp directory: {self.temp_dir}")
+            
+            # Test if the directory is writable
+            test_file = os.path.join(self.temp_dir, 'test.txt')
+            with open(test_file, 'w') as f:
+                f.write('test')
+            os.remove(test_file)
+            logger.debug(f"Temp directory {self.temp_dir} is writable")
+        except Exception as e:
+            # If standard temp directory fails, try alternatives
+            logger.warning(f"Failed to create temp directory with standard method: {str(e)}")
+            try:
+                # Try /tmp explicitly
+                self.temp_dir = os.path.join('/tmp', f'media_{os.getpid()}')
+                os.makedirs(self.temp_dir, exist_ok=True)
+                
+                # Test if directory is writable
+                test_file = os.path.join(self.temp_dir, 'test.txt')
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                os.remove(test_file)
+                logger.debug(f"Created alternate temp directory: {self.temp_dir}")
+            except Exception as alt_e:
+                # Last resort: try current directory
+                logger.error(f"Failed to create alternate temp directory: {str(alt_e)}")
+                self.temp_dir = os.path.join(os.getcwd(), 'tmp_media')
+                os.makedirs(self.temp_dir, exist_ok=True)
+                logger.debug(f"Created fallback temp directory: {self.temp_dir}")
+        
         self.unsplash_api_key = os.getenv('UNSPLASH_ACCESS_KEY')
         if not self.unsplash_api_key:
             logger.error("UNSPLASH_ACCESS_KEY not found in environment variables")
             
-        logger.info("Initialized MediaFetcher")
+        logger.info(f"Initialized MediaFetcher with temp directory: {self.temp_dir}")
 
     @property
     def openai_client(self):
@@ -180,14 +212,27 @@ class MediaFetcher:
             filename = f"media_{hash(url)}{ext}"
             filepath = os.path.join(self.temp_dir, filename)
             
+            # Ensure the directory exists (in case it was deleted after initialization)
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            
+            # Log the full details for debugging
+            logger.debug(f"Downloading from {url} to {filepath}")
+            
+            # Save the file
             with open(filepath, 'wb') as f:
                 f.write(response.content)
-            
-            logger.info(f"Successfully downloaded file to {filepath}")
-            return filepath
-            
+                
+            # Verify file was written successfully
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                logger.debug(f"Successfully downloaded file to {filepath} (size: {os.path.getsize(filepath)} bytes)")
+                return filepath
+            else:
+                logger.error(f"File download failed: File exists: {os.path.exists(filepath)}, Size: {os.path.getsize(filepath) if os.path.exists(filepath) else 0}")
+                return None
+                
         except Exception as e:
             logger.error(f"Error downloading from {url}: {str(e)}")
+            logger.debug(f"Exception traceback: {traceback.format_exc()}")
             return None
 
     def fetch_media(self, content: str, duration: float = 15.0) -> Dict[str, List[str]]:
