@@ -15,7 +15,48 @@ class AudioGenerator:
     def __init__(self):
         """Initialize the AudioGenerator service."""
         self.voice = "en-US-GuyNeural"  # Default voice
-        self.temp_dir = tempfile.mkdtemp(prefix='audio_')
+        
+        # Create temporary directory with multiple fallback options
+        try:
+            self.temp_dir = tempfile.mkdtemp(prefix='audio_')
+            logger.info(f"Created temp directory: {self.temp_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to create temp directory with tempfile.mkdtemp: {str(e)}")
+            
+            # Fallback 1: Try to create in /tmp
+            try:
+                self.temp_dir = os.path.join('/tmp', f'audio_{os.urandom(4).hex()}')
+                os.makedirs(self.temp_dir, exist_ok=True)
+                logger.info(f"Created temp directory (fallback 1): {self.temp_dir}")
+            except Exception as e2:
+                logger.warning(f"Failed to create temp directory in /tmp: {str(e2)}")
+                
+                # Fallback 2: Use current directory
+                try:
+                    self.temp_dir = os.path.join(os.getcwd(), f'tmp_audio_{os.urandom(4).hex()}')
+                    os.makedirs(self.temp_dir, exist_ok=True)
+                    logger.info(f"Created temp directory (fallback 2): {self.temp_dir}")
+                except Exception as e3:
+                    logger.error(f"All attempts to create temporary directory failed: {str(e3)}")
+                    # Last resort - use a hardcoded path that should be writable on most systems
+                    self.temp_dir = '/tmp/audio_default'
+                    os.makedirs(self.temp_dir, exist_ok=True)
+                    logger.info(f"Using default temp directory: {self.temp_dir}")
+        
+        # Verify the directory exists and is writable
+        if not os.path.exists(self.temp_dir):
+            logger.error(f"Temp directory does not exist after creation attempts: {self.temp_dir}")
+        else:
+            # Test if directory is writable
+            try:
+                test_file = os.path.join(self.temp_dir, 'test_write.txt')
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                os.remove(test_file)
+                logger.info(f"Temp directory is writable: {self.temp_dir}")
+            except Exception as e:
+                logger.error(f"Temp directory exists but is not writable: {self.temp_dir}, error: {str(e)}")
+
         logger.info(f"Initialized AudioGenerator with temp directory: {self.temp_dir}")
 
     def generate_audio(self, text: str, voice: Optional[str] = None, fade_in: float = 2.0, fade_out: float = 2.0) -> str:
@@ -110,9 +151,20 @@ class AudioGenerator:
             selected_voice = voice or self.voice
             logger.debug(f"Using voice: {selected_voice}")
             
+            # Ensure the temp directory exists
+            if not os.path.exists(self.temp_dir):
+                logger.warning(f"Temp directory doesn't exist, recreating: {self.temp_dir}")
+                os.makedirs(self.temp_dir, exist_ok=True)
+                
             # Create temporary file path
             temp_path = os.path.join(self.temp_dir, f"audio_{hash(text)}.mp3")
             logger.debug(f"Will save audio to: {temp_path}")
+            
+            # Double-check parent directory exists before saving
+            parent_dir = os.path.dirname(temp_path)
+            if not os.path.exists(parent_dir):
+                logger.warning(f"Parent directory doesn't exist, creating: {parent_dir}")
+                os.makedirs(parent_dir, exist_ok=True)
             
             # Generate audio
             communicate = Communicate(text, selected_voice)
