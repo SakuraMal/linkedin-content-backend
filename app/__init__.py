@@ -30,17 +30,36 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     # Configure CORS with the exact configuration from docs/CORS.md
     CORS(app, 
          resources={r"/*": {"origins": allowed_origins}},
-         supports_credentials=True)
+         supports_credentials=True,
+         automatic_options=True)
 
-    # Keep this after-request handler for additional CORS header insurance
-    @app.after_request
-    def after_request(response):
+    # Handle OPTIONS requests explicitly for all routes
+    @app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
+    @app.route('/<path:path>', methods=['OPTIONS'])
+    def options_handler(path):
+        response = app.make_default_options_response()
         origin = request.headers.get('Origin')
         if origin and origin in allowed_origins:
             response.headers.add('Access-Control-Allow-Origin', origin)
             response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
             response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
             response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+
+    # Keep this after-request handler for additional CORS header insurance
+    @app.after_request
+    def after_request(response):
+        origin = request.headers.get('Origin')
+        if origin and origin in allowed_origins:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            
+            # Specific handling for preflight requests
+            if request.method == 'OPTIONS':
+                # Ensure OPTIONS responses get the right headers
+                response.headers['Access-Control-Max-Age'] = '3600'  # Cache preflight for 1 hour
         return response
 
     if test_config is None:
