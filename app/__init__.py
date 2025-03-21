@@ -21,11 +21,19 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     default_origins = 'http://localhost:3000,https://linkedin-content-frontend.vercel.app'
     allowed_origins = os.environ.get('CORS_ORIGINS', default_origins).split(',')
     logger.info(f"Configuring CORS with allowed origins: {allowed_origins}")
+
+    # Configure CORS using resources format compatible with Flask-CORS 5.0.0
     CORS(app, 
-         origins=allowed_origins,
-         supports_credentials=True,
-         allow_headers=['Content-Type', 'Authorization'],
-         methods=['GET', 'POST', 'OPTIONS'])
+         resources={r"/*": {
+             "origins": allowed_origins,
+             "supports_credentials": True,
+             "allow_headers": ['Content-Type', 'Authorization'],
+             "methods": ['GET', 'POST', 'OPTIONS']
+         }})
+    
+    # Remove all custom CORS handlers we added previously
+    # No after_request handler for CORS
+    # No custom OPTIONS route handlers
 
     if test_config is None:
         app.config.from_mapping(
