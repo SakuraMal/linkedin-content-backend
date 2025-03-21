@@ -22,16 +22,20 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     allowed_origins = os.environ.get('CORS_ORIGINS', default_origins).split(',')
     logger.info(f"Configuring CORS with allowed origins: {allowed_origins}")
 
-    # Configure CORS using resources format compatible with Flask-CORS 5.0.0
-    CORS(app, 
-         resources={r"/*": {
-             "origins": allowed_origins,
-             "supports_credentials": True,
-             "allow_headers": ['Content-Type', 'Authorization'],
-             "methods": ['GET', 'POST', 'OPTIONS']
-         }})
+    # Add more verbose logging for CORS
+    logger.debug("Setting up CORS with Flask-CORS 4.0.0")
+    logger.debug(f"CORS parameters: origins={allowed_origins}, supports_credentials=True")
     
-    # Remove all custom CORS handlers we added previously
+    # Configure CORS using both formats to be completely safe with Flask-CORS 4.0.0
+    CORS(app, 
+         # Specify both global parameters and resources to be safe
+         origins=allowed_origins,
+         supports_credentials=True,
+         allow_headers=['Content-Type', 'Authorization'],
+         methods=['GET', 'POST', 'OPTIONS'],
+         # Also use resources format (which is preferred in many versions)
+         resources={r"/*": {"origins": allowed_origins}})
+    
     # No after_request handler for CORS
     # No custom OPTIONS route handlers
 
