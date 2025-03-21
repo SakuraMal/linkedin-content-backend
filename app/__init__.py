@@ -28,6 +28,10 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     logger.debug("Setting up CORS with direct after_request handler")
     logger.debug(f"CORS parameters: allowed_origins={allowed_origins}")
     
+    # Print each allowed origin for debugging
+    for origin in allowed_origins:
+        logger.debug(f"Allowed origin: '{origin}'")
+    
     # Custom CORS handling without Flask-CORS
     @app.after_request
     def add_cors_headers(response):
@@ -37,29 +41,43 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
         logger.debug(f"Processing request: {request.method} {request.path}")
         logger.debug(f"Request headers: {dict(request.headers)}")
         
-        # If the origin is in our allowed list, add CORS headers
-        if origin and origin in allowed_origins:
-            logger.debug(f"Adding CORS headers for origin: {origin}")
+        # Check if origin is present
+        if origin:
+            logger.debug(f"Request origin: '{origin}'")
             
-            # Standard CORS headers
-            response.headers['Access-Control-Allow-Origin'] = origin
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            # Check if origin is allowed - use explicit string comparison
+            is_allowed = False
+            for allowed_origin in allowed_origins:
+                # Trim any whitespace
+                allowed_origin = allowed_origin.strip()
+                logger.debug(f"Comparing '{origin}' with allowed origin '{allowed_origin}'")
+                if origin == allowed_origin:
+                    is_allowed = True
+                    logger.debug(f"Origin match found: {origin} == {allowed_origin}")
+                    break
             
-            # Add Vary header to signal that the response varies based on Origin
-            response.headers['Vary'] = 'Origin'
-            
-            # For preflight requests
-            if request.method == 'OPTIONS':
-                logger.debug("Handling OPTIONS request - adding preflight headers")
-                # Preflight requests don't need a body
-                return response
-        else:
-            if origin:
-                logger.debug(f"Origin not allowed: {origin}")
+            # If the origin is allowed, add CORS headers
+            if is_allowed:
+                logger.debug(f"Adding CORS headers for allowed origin: {origin}")
+                
+                # Standard CORS headers
+                response.headers['Access-Control-Allow-Origin'] = origin
+                response.headers['Access-Control-Allow-Credentials'] = 'true'
+                response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+                
+                # Add Vary header to signal that the response varies based on Origin
+                response.headers['Vary'] = 'Origin'
+                
+                # For preflight requests
+                if request.method == 'OPTIONS':
+                    logger.debug("Handling OPTIONS request - adding preflight headers")
+                    # Preflight requests don't need a body
+                    return response
             else:
-                logger.debug("No Origin header in request")
+                logger.debug(f"Origin not allowed after comparison: '{origin}'")
+        else:
+            logger.debug("No Origin header in request")
                 
         return response
 
