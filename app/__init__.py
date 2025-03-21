@@ -1,11 +1,13 @@
 from flask import Flask, jsonify, request, send_from_directory
-from flask_cors import CORS, cross_origin
 import os
 import logging
 from dotenv import load_dotenv
 import redis
 from .routes.video import bp as video_bp
 from .routes.post import bp as post_bp
+
+# DO NOT IMPORT FLASK-CORS - we'll handle CORS directly
+# from flask_cors import CORS, cross_origin
 
 load_dotenv()
 
@@ -23,21 +25,46 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     logger.info(f"Configuring CORS with allowed origins: {allowed_origins}")
 
     # Add more verbose logging for CORS
-    logger.debug("Setting up CORS with Flask-CORS 4.0.0")
-    logger.debug(f"CORS parameters: origins={allowed_origins}, supports_credentials=True")
+    logger.debug("Setting up CORS with direct after_request handler")
+    logger.debug(f"CORS parameters: allowed_origins={allowed_origins}")
     
-    # Configure CORS using both formats to be completely safe with Flask-CORS 4.0.0
-    CORS(app, 
-         # Specify both global parameters and resources to be safe
-         origins=allowed_origins,
-         supports_credentials=True,
-         allow_headers=['Content-Type', 'Authorization'],
-         methods=['GET', 'POST', 'OPTIONS'],
-         # Also use resources format (which is preferred in many versions)
-         resources={r"/*": {"origins": allowed_origins}})
-    
-    # No after_request handler for CORS
-    # No custom OPTIONS route handlers
+    # Custom CORS handling without Flask-CORS
+    @app.after_request
+    def add_cors_headers(response):
+        origin = request.headers.get('Origin')
+        
+        # Log request details for debugging
+        logger.debug(f"Processing request: {request.method} {request.path}")
+        logger.debug(f"Request headers: {dict(request.headers)}")
+        
+        # If the origin is in our allowed list, add CORS headers
+        if origin and origin in allowed_origins:
+            logger.debug(f"Adding CORS headers for origin: {origin}")
+            
+            # Standard CORS headers
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            
+            # Add Vary header to signal that the response varies based on Origin
+            response.headers['Vary'] = 'Origin'
+            
+            # For preflight requests
+            if request.method == 'OPTIONS':
+                logger.debug("Handling OPTIONS request - adding preflight headers")
+                # Preflight requests don't need a body
+                return response
+        else:
+            if origin:
+                logger.debug(f"Origin not allowed: {origin}")
+            else:
+                logger.debug("No Origin header in request")
+                
+        return response
+
+    # No Flask-CORS middleware
+    # No custom OPTIONS route handlers except the ones handled by after_request
 
     if test_config is None:
         app.config.from_mapping(
