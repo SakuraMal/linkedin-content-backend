@@ -218,8 +218,11 @@ def generate_video():
         thread.start()
         
         return jsonify({
-            "job_id": job_id,
-            "status": "queued",
+            "success": True,
+            "data": {
+                "job_id": job_id,
+                "status": "queued"
+            },
             "message": "Video generation started"
         })
         
@@ -230,7 +233,7 @@ def generate_video():
         # Capture exception in Sentry
         sentry_sdk.capture_exception(e)
         
-        return jsonify({"error": f"Error generating video: {str(e)}"}), 500
+        return jsonify({"success": False, "error": f"Error generating video: {str(e)}"}), 500
 
 @bp.route('/status/<job_id>', methods=['GET', 'OPTIONS'])
 def get_job_status(job_id):
@@ -255,8 +258,8 @@ def get_job_status(job_id):
         job_key = f"job:{job_id}:status"
         if not redis_client.exists(job_key):
             return jsonify({
-                "status": "error", 
-                "message": f"No job found with ID {job_id}"
+                "success": False, 
+                "error": f"No job found with ID {job_id}"
             }), 404
         
         # Get job details
@@ -264,13 +267,13 @@ def get_job_status(job_id):
         
         # Return response (CORS headers will be added by Flask-CORS middleware)
         return jsonify({
-            "status": "success",
+            "success": True,
             "data": job_data
         })
         
     except Exception as e:
         current_app.logger.error(f"Error getting job status: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @bp.route('/cors-test', methods=['GET', 'OPTIONS'])
 def cors_test():
