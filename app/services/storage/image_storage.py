@@ -113,32 +113,69 @@ class ImageStorageService:
             Optional[str]: Signed URL for the image if found
         """
         try:
-            # Use a specific prefix with the image ID to make search more efficient
-            prefix = f"{self.image_folder}/**/{image_id}"
+            # Check if this is a stock media ID
+            is_stock_media = image_id.startswith('stock_')
             
-            logger.info(f"Searching for image with ID: {image_id} using prefix: {prefix}")
+            # Use different prefix based on whether it's stock media or user uploads
+            if is_stock_media:
+                logger.info(f"Searching for stock media with ID: {image_id}")
+                # Look in both user_uploads and stock-media directories
+                search_locations = [
+                    f"user_uploads/images/**/{image_id}",  # First check traditional location
+                    f"stock-media/images/**/{image_id}",   # Then check stock media location
+                    f"stock-media/images/{image_id[6:]}.jpg",  # Try direct path with ID minus prefix
+                    f"stock-media/{image_id[6:]}.jpg",     # Try another common path
+                ]
+            else:
+                # For regular user uploads, just use the standard path
+                search_locations = [f"{self.image_folder}/**/{image_id}"]
+                
+            logger.info(f"Searching for image with ID: {image_id} using prefix: {search_locations[0]}")
             
-            # List blobs that might contain this image ID
-            blobs = self.client.list_blobs(
-                self.bucket_name,
-                prefix=self.image_folder  # Search in the entire user uploads folder
-            )
-            
-            # Find the first blob that contains the image ID in its name or metadata
-            matching_blob = next((blob for blob in blobs if 
-                                 image_id in blob.name or
-                                 (blob.metadata and 'image_id' in blob.metadata and blob.metadata['image_id'] == image_id)), 
-                                None)
-            
-            if matching_blob:
-                # Generate a signed URL
-                url = matching_blob.generate_signed_url(
-                    version="v4",
-                    expiration=timedelta(days=1),
-                    method="GET"
+            # Try each search location
+            for location in search_locations:
+                logger.info(f"Checking location: {location}")
+                
+                # For direct file check, verify if the blob exists
+                if not location.endswith("**/" + image_id):
+                    try:
+                        direct_blob = self.bucket.blob(location)
+                        if direct_blob.exists():
+                            url = direct_blob.generate_signed_url(
+                                version="v4",
+                                expiration=timedelta(days=1),
+                                method="GET"
+                            )
+                            logger.info(f"Found image {image_id} at direct path {location}")
+                            return url
+                    except Exception as e:
+                        logger.debug(f"Error checking direct path {location}: {str(e)}")
+                
+                # Otherwise do a prefix search
+                prefix = location.split("**/")[0] if "**/" in location else location.rsplit('/', 1)[0]
+                
+                # List blobs that might contain this image ID
+                blobs = self.client.list_blobs(
+                    self.bucket_name,
+                    prefix=prefix
                 )
-                logger.info(f"Found image {image_id} at {matching_blob.name}")
-                return url
+                
+                # Find the first blob that contains the image ID in its name or metadata
+                matching_blobs = [blob for blob in blobs if 
+                                  (is_stock_media and (image_id in blob.name or image_id[6:] in blob.name)) or
+                                  (not is_stock_media and image_id in blob.name) or
+                                  (blob.metadata and 'image_id' in blob.metadata and blob.metadata['image_id'] == image_id)]
+                
+                if matching_blobs:
+                    matching_blob = matching_blobs[0]
+                    # Generate a signed URL
+                    url = matching_blob.generate_signed_url(
+                        version="v4",
+                        expiration=timedelta(days=1),
+                        method="GET"
+                    )
+                    logger.info(f"Found image {image_id} at {matching_blob.name}")
+                    return url
             
             logger.warning(f"No image found with ID {image_id}")
             return None
