@@ -177,22 +177,33 @@ class VideoGenerator:
             if hasattr(request, 'model_extra') and 'stockImageUrls' in request.model_extra:
                 stock_image_urls = request.model_extra['stockImageUrls']
                 is_stock_media_direct = True
-                logger.info(f"Found stockImageUrls in model_extra: {len(stock_image_urls)} URLs")
+                logger.info(f"Found stockImageUrls in model_extra: {stock_image_urls}")
             elif hasattr(request, '__dict__'):
                 try:
                     # Try to find it in __dict__
                     if 'stockImageUrls' in request.__dict__:
                         stock_image_urls = request.__dict__['stockImageUrls']
                         is_stock_media_direct = True
-                        logger.info(f"Found stockImageUrls in __dict__: {len(stock_image_urls)} URLs")
+                        logger.info(f"Found stockImageUrls in __dict__: {stock_image_urls}")
                     # Also try raw dictionary access (for non-standard attributes)
                     elif isinstance(request.__dict__.get('_obj'), dict) and 'stockImageUrls' in request.__dict__['_obj']:
                         stock_image_urls = request.__dict__['_obj']['stockImageUrls']
                         is_stock_media_direct = True
-                        logger.info(f"Found stockImageUrls in _obj: {len(stock_image_urls)} URLs")
+                        logger.info(f"Found stockImageUrls in _obj: {stock_image_urls}")
                 except Exception as e:
                     logger.error(f"Error extracting stockImageUrls from __dict__: {str(e)}")
-                    
+
+            # Handle both list and dictionary formats for stockImageUrls
+            urls_to_download = []
+            if isinstance(stock_image_urls, dict):
+                logger.info(f"stockImageUrls is a dictionary with {len(stock_image_urls)} items")
+                # It's a map of IDs to URLs, extract just the URLs
+                urls_to_download = list(stock_image_urls.values())
+            elif isinstance(stock_image_urls, list):
+                logger.info("stockImageUrls is a list")
+                # It's already a list of URLs
+                urls_to_download = stock_image_urls
+            
             # Also look for the skip flag
             skip_user_images = False
             if hasattr(request, 'model_extra') and 'skipUserImageIds' in request.model_extra:
@@ -207,16 +218,16 @@ class VideoGenerator:
                     logger.error(f"Error extracting skipUserImageIds: {str(e)}")
                     
             # Log for debugging
-            logger.info(f"Direct stock media check: is_stock_media_direct={is_stock_media_direct}, urls_count={len(stock_image_urls)}, skip_user_images={skip_user_images}")
+            logger.info(f"Direct stock media check: is_stock_media_direct={is_stock_media_direct}, urls_count={len(urls_to_download)}, skip_user_images={skip_user_images}")
                 
-            if is_stock_media_direct and stock_image_urls and len(stock_image_urls) > 0:
+            if is_stock_media_direct and urls_to_download and len(urls_to_download) > 0:
                 # Process similar to AI but with direct stock URLs
-                logger.info(f"Using direct stock media URLs approach with {len(stock_image_urls)} URLs")
+                logger.info(f"Using direct stock media URLs approach with {len(urls_to_download)} URLs")
                 self.update_job_status(redis_client, job_id, "fetching_user_images", progress=5)
                 
                 # Download all stock images directly
                 stock_image_paths = []
-                for url in stock_image_urls:
+                for url in urls_to_download:
                     logger.info(f"Downloading stock image from URL: {url}")
                     local_path = media_fetcher.download_file(url)
                     if local_path:
