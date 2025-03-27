@@ -51,6 +51,9 @@ class VideoRequest(BaseModel):
     user_image_ids: Optional[List[str]] = Field(default=None, description="List of IDs for user-uploaded images to use in the video")
     content_analysis: Optional[ContentAnalysis] = Field(default=None, description="Content analysis results for better video generation")
     theme: Optional[str] = Field(default="business", description="Theme of the content")
+    # Add explicit fields for stock media URLs mapping (supporting both naming conventions)
+    stockMediaUrls: Optional[Dict[str, str]] = Field(default=None, description="Mapping of stock media IDs to their URLs")
+    stockImageUrls: Optional[Dict[str, str]] = Field(default=None, description="Alternative name for stockMediaUrls")
     
     class Config:
         # Allow unknown fields to handle different frontend formats
