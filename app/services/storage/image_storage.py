@@ -1,11 +1,13 @@
 import os
 import uuid
 import logging
+import json
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from werkzeug.datastructures import FileStorage
 from google.cloud import storage
 from google.cloud.storage import Blob
+import redis
 
 # Import the existing storage service
 from ..video.storage import StorageService
@@ -29,8 +31,69 @@ class ImageStorageService:
         
         # Set up image-specific configuration
         self.image_folder = "user_uploads/images"
+        
+        # Setup Redis connection for fallback URL storage
+        redis_host = os.environ.get('REDIS_HOST', 'localhost')
+        redis_port = int(os.environ.get('REDIS_PORT', 6379))
+        self.redis_client = redis.Redis(host=redis_host, port=redis_port, db=0)
+        self.redis_stock_prefix = "stock_media_url:"
+        
         logger.info(f"Initialized ImageStorageService with bucket: {self.bucket_name}")
         
+    def store_stock_media_url(self, stock_id: str, original_url: str, media_type: str = 'image') -> bool:
+        """
+        Store the original URL for a stock media item in Redis
+        
+        Args:
+            stock_id: The ID with 'stock_' prefix
+            original_url: The original URL of the media
+            media_type: The type of media (image or video)
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            # Create a record with metadata
+            record = {
+                'url': original_url,
+                'type': media_type,
+                'created_at': datetime.now().isoformat()
+            }
+            
+            # Store in Redis with 30-day expiration
+            self.redis_client.setex(
+                f"{self.redis_stock_prefix}{stock_id}", 
+                timedelta(days=30).total_seconds(),
+                json.dumps(record)
+            )
+            logger.info(f"Stored fallback URL for {stock_id}: {original_url}")
+            return True
+        except Exception as e:
+            logger.error(f"Error storing stock media URL for {stock_id}: {e}")
+            return False
+            
+    def get_stock_media_url(self, stock_id: str) -> Optional[str]:
+        """
+        Retrieve the original URL for a stock media item from Redis
+        
+        Args:
+            stock_id: The ID with 'stock_' prefix
+            
+        Returns:
+            Optional[str]: The original URL if found
+        """
+        try:
+            # Get the record from Redis
+            record = self.redis_client.get(f"{self.redis_stock_prefix}{stock_id}")
+            if record:
+                data = json.loads(record)
+                logger.info(f"Found fallback URL for {stock_id}: {data['url']}")
+                return data['url']
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving stock media URL for {stock_id}: {e}")
+            return None
+    
     def upload_images(self, files: List[FileStorage], user_id: str = None) -> List[Dict[str, Any]]:
         """
         Upload multiple images to Google Cloud Storage.
@@ -115,6 +178,13 @@ class ImageStorageService:
         try:
             # Check if this is a stock media ID
             is_stock_media = image_id.startswith('stock_')
+            
+            # First, try to check if we have a fallback URL for stock media
+            if is_stock_media:
+                fallback_url = self.get_stock_media_url(image_id)
+                if fallback_url:
+                    logger.info(f"Using fallback URL for stock media {image_id}: {fallback_url}")
+                    return fallback_url
             
             # Use different prefix based on whether it's stock media or user uploads
             if is_stock_media:

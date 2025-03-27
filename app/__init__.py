@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import redis
 from .routes.video import bp as video_bp
 from .routes.post import bp as post_bp
+from .routes.stock_media import stock_media_bp
 
 # DO NOT IMPORT FLASK-CORS - we'll handle CORS directly
 # from flask_cors import CORS, cross_origin
@@ -122,5 +123,6 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
     # Register blueprints
     app.register_blueprint(video_bp, url_prefix='/api/video')
     app.register_blueprint(post_bp, url_prefix='/api/post')
+    app.register_blueprint(stock_media_bp)
 
     return app
