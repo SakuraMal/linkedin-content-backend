@@ -73,12 +73,13 @@ class VideoGenerator:
             logger.error(f"Error updating job status: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
 
-    def fetch_user_images(self, image_ids: List[str]) -> List[str]:
+    def fetch_user_images(self, image_ids: List[str], request=None) -> List[str]:
         """
         Fetch user-uploaded images from Google Cloud Storage.
         
         Args:
             image_ids: List of image IDs to fetch
+            request: Optional request object that might contain stockMediaUrls
             
         Returns:
             List[str]: List of local file paths to downloaded images
@@ -87,9 +88,21 @@ class VideoGenerator:
             logger.info(f"Fetching {len(image_ids)} user-uploaded images")
             image_paths = []
             
+            # Check if we have stockMediaUrls in the request
+            stock_media_urls = {}
+            if request and hasattr(request, 'stockMediaUrls') and request.stockMediaUrls:
+                stock_media_urls = request.stockMediaUrls
+                logger.info(f"Found stockMediaUrls in request for {len(stock_media_urls)} stock media items")
+            
             for image_id in image_ids:
-                # Get signed URL for the image
+                # First try to get signed URL for the image from storage
                 image_url = image_storage_service.get_image_url(image_id)
+                
+                # If not found in storage but we have a stock URL in the request, use that
+                if not image_url and image_id.startswith('stock_') and image_id in stock_media_urls:
+                    image_url = stock_media_urls[image_id]
+                    logger.info(f"Using provided stock media URL for {image_id}: {image_url}")
+                
                 if not image_url:
                     logger.warning(f"Could not find image with ID: {image_id}")
                     continue
@@ -149,7 +162,7 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "fetching_user_images", progress=5)
                 
                 # Fetch user images and create media assets object
-                user_image_paths = self.fetch_user_images(request.user_image_ids)
+                user_image_paths = self.fetch_user_images(request.user_image_ids, request)
                 
                 # Track user image paths for cleanup
                 temp_files.extend(user_image_paths)
