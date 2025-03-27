@@ -16,6 +16,7 @@ import os
 import shutil
 import tempfile
 import psutil
+import requests
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
@@ -73,44 +74,72 @@ class VideoGenerator:
             logger.error(f"Error updating job status: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
 
-    def fetch_user_images(self, image_ids: List[str]) -> List[str]:
+    def fetch_user_images(self, user_image_ids, request_data=None):
         """
-        Fetch user-uploaded images from Google Cloud Storage.
+        Fetch user-uploaded images by their IDs
         
         Args:
-            image_ids: List of image IDs to fetch
+            user_image_ids: List of image IDs
+            request_data: Optional request data that might contain stock media URLs
             
         Returns:
-            List[str]: List of local file paths to downloaded images
+            List of image file paths
         """
-        try:
-            logger.info(f"Fetching {len(image_ids)} user-uploaded images")
-            image_paths = []
-            
-            for image_id in image_ids:
-                # Get signed URL for the image
+        logger.info(f"Fetching {len(user_image_ids)} user-uploaded images")
+        image_files = []
+        
+        # Extract stock media URLs from request if available
+        stock_media_urls = {}
+        if request_data and 'stockMediaUrls' in request_data:
+            logger.info(f"Found stockMediaUrls in request data with {len(request_data['stockMediaUrls'])} entries")
+            stock_media_urls = request_data['stockMediaUrls']
+        
+        for image_id in user_image_ids:
+            try:
+                # Check if it's a stock media ID with a URL in the request
+                if image_id.startswith('stock_') and image_id in stock_media_urls:
+                    # Use the URL directly from the request
+                    stock_url = stock_media_urls[image_id]
+                    logger.info(f"Using original stock URL for {image_id}: {stock_url}")
+                    
+                    # Download the image to a temporary file
+                    response = requests.get(stock_url, stream=True)
+                    if response.status_code != 200:
+                        logger.warning(f"Could not download stock image from URL: {stock_url}")
+                        continue
+                    
+                    # Save to a temporary file
+                    img_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                    img_file.write(response.content)
+                    img_file.close()
+                    
+                    image_files.append(img_file.name)
+                    continue
+                    
+                # Regular flow: Get image URL from storage
                 image_url = image_storage_service.get_image_url(image_id)
                 if not image_url:
                     logger.warning(f"Could not find image with ID: {image_id}")
                     continue
                 
-                logger.info(f"Successfully got URL for image {image_id}: {image_url}")
+                # Download the image
+                response = requests.get(image_url, stream=True)
+                if response.status_code != 200:
+                    logger.warning(f"Could not download image from URL: {image_url}")
+                    continue
                 
-                # Download the image to a local file
-                local_path = media_fetcher.download_file(image_url)
-                if local_path:
-                    image_paths.append(local_path)
-                    logger.info(f"Downloaded user image {image_id} to {local_path}")
-                else:
-                    logger.error(f"Failed to download user image {image_id}")
-            
-            logger.info(f"Successfully fetched {len(image_paths)} user images")
-            return image_paths
-            
-        except Exception as e:
-            logger.error(f"Error fetching user images: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            return []
+                # Save to a temporary file
+                img_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                img_file.write(response.content)
+                img_file.close()
+                
+                image_files.append(img_file.name)
+                
+            except Exception as e:
+                logger.error(f"Error fetching image {image_id}: {str(e)}")
+        
+        logger.info(f"Successfully fetched {len(image_files)} user images")
+        return image_files
 
     def generate_video(self, job_id: str, request: VideoRequest, redis_client: Redis) -> str:
         """
@@ -137,34 +166,38 @@ class VideoGenerator:
             # Update status to processing
             self.update_job_status(redis_client, job_id, "initialized", progress=0)
             
-            # Determine if we're using user-provided images
-            using_user_images = hasattr(request, 'user_image_ids') and request.user_image_ids and len(request.user_image_ids) > 0
+            # Extract request data
+            request_data = request.model_dump()
+            
+            # Get user-provided image IDs if any
+            user_image_ids = request_data.get('user_image_ids', [])
             
             # Monitor memory usage before fetching images
             logger.info(f"Memory before fetching images: {process.memory_info().rss / 1024 / 1024:.2f} MB")
             
-            # Get media assets (either user-provided or from Unsplash)
-            if using_user_images:
-                logger.info(f"Using user-provided images: {request.user_image_ids}")
+            # Handle user-provided images if any
+            image_files = []
+            if user_image_ids:
+                logger.info(f"Using user-provided images: {user_image_ids}")
                 self.update_job_status(redis_client, job_id, "fetching_user_images", progress=5)
                 
-                # Fetch user images and create media assets object
-                user_image_paths = self.fetch_user_images(request.user_image_ids)
+                # Fetch user-provided images, passing the full request_data
+                image_files = self.fetch_user_images(user_image_ids, request_data)
                 
                 # Track user image paths for cleanup
-                temp_files.extend(user_image_paths)
+                temp_files.extend(image_files)
                 
-                if not user_image_paths:
+                if not image_files:
                     error_msg = "Failed to fetch any user-provided images"
                     logger.error(error_msg)
                     self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                     raise Exception(error_msg)
                 
-                logger.info(f"Successfully fetched {len(user_image_paths)} user images")
+                logger.info(f"Successfully fetched {len(image_files)} user images")
                 self.update_job_status(redis_client, job_id, "user_images_fetched", progress=10)
                 
                 # Create media assets object with user images
-                media_assets = {'images': user_image_paths, 'videos': []}
+                media_assets = {'images': image_files, 'videos': []}
                 self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
                 
             else:
