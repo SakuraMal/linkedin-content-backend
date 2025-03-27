@@ -92,37 +92,44 @@ class VideoGenerator:
         stock_media_urls = {}
         
         # Check for stockMediaUrls (frontend naming convention)
-        if request_data and hasattr(request_data, '__dict__') and 'stockMediaUrls' in request_data.__dict__:
-            logger.info(f"Found stockMediaUrls in request_data.__dict__ with {len(request_data.__dict__['stockMediaUrls'])} entries")
-            stock_media_urls = request_data.__dict__['stockMediaUrls']
-        # Check for stockImageUrls (backend naming convention)
-        elif request_data and hasattr(request_data, '__dict__') and 'stockImageUrls' in request_data.__dict__:
-            logger.info(f"Found stockImageUrls in request_data.__dict__ with {len(request_data.__dict__['stockImageUrls'])} entries")
-            stock_media_urls = request_data.__dict__['stockImageUrls']
+        if request_data and hasattr(request_data, '__dict__'):
+            # Safely check if 'stockMediaUrls' exists in __dict__ and is not None
+            stock_media_urls_dict = request_data.__dict__.get('stockMediaUrls')
+            if stock_media_urls_dict is not None:
+                logger.info(f"Found stockMediaUrls in request_data.__dict__ with {len(stock_media_urls_dict)} entries")
+                stock_media_urls = stock_media_urls_dict
+            # Check for stockImageUrls (backend naming convention)
+            elif 'stockImageUrls' in request_data.__dict__ and request_data.__dict__['stockImageUrls'] is not None:
+                logger.info(f"Found stockImageUrls in request_data.__dict__ with {len(request_data.__dict__['stockImageUrls'])} entries")
+                stock_media_urls = request_data.__dict__['stockImageUrls']
         # Check if request_data is a dict and has stockMediaUrls
-        elif request_data and isinstance(request_data, dict) and 'stockMediaUrls' in request_data:
-            logger.info(f"Found stockMediaUrls in request_data dict with {len(request_data['stockMediaUrls'])} entries")
-            stock_media_urls = request_data['stockMediaUrls']
-        # Check if request_data is a dict and has stockImageUrls
-        elif request_data and isinstance(request_data, dict) and 'stockImageUrls' in request_data:
-            logger.info(f"Found stockImageUrls in request_data dict with {len(request_data['stockImageUrls'])} entries")
-            stock_media_urls = request_data['stockImageUrls']
+        elif request_data and isinstance(request_data, dict):
+            # Safely check if 'stockMediaUrls' exists and is not None
+            if 'stockMediaUrls' in request_data and request_data['stockMediaUrls'] is not None:
+                logger.info(f"Found stockMediaUrls in request_data dict with {len(request_data['stockMediaUrls'])} entries")
+                stock_media_urls = request_data['stockMediaUrls']
+            # Check if request_data is a dict and has stockImageUrls
+            elif 'stockImageUrls' in request_data and request_data['stockImageUrls'] is not None:
+                logger.info(f"Found stockImageUrls in request_data dict with {len(request_data['stockImageUrls'])} entries")
+                stock_media_urls = request_data['stockImageUrls']
         # Check if request_data has model_extra attribute with stockMediaUrls
-        elif request_data and hasattr(request_data, 'model_extra') and 'stockMediaUrls' in request_data.model_extra:
-            logger.info(f"Found stockMediaUrls in request_data.model_extra with {len(request_data.model_extra['stockMediaUrls'])} entries")
-            stock_media_urls = request_data.model_extra['stockMediaUrls']
-        # Check if request_data has model_extra attribute with stockImageUrls
-        elif request_data and hasattr(request_data, 'model_extra') and 'stockImageUrls' in request_data.model_extra:
-            logger.info(f"Found stockImageUrls in request_data.model_extra with {len(request_data.model_extra['stockImageUrls'])} entries")
-            stock_media_urls = request_data.model_extra['stockImageUrls']
+        elif request_data and hasattr(request_data, 'model_extra'):
+            # Safely check if 'stockMediaUrls' exists in model_extra and is not None
+            if 'stockMediaUrls' in request_data.model_extra and request_data.model_extra['stockMediaUrls'] is not None:
+                logger.info(f"Found stockMediaUrls in request_data.model_extra with {len(request_data.model_extra['stockMediaUrls'])} entries")
+                stock_media_urls = request_data.model_extra['stockMediaUrls']
+            # Check if request_data has model_extra attribute with stockImageUrls
+            elif 'stockImageUrls' in request_data.model_extra and request_data.model_extra['stockImageUrls'] is not None:
+                logger.info(f"Found stockImageUrls in request_data.model_extra with {len(request_data.model_extra['stockImageUrls'])} entries")
+                stock_media_urls = request_data.model_extra['stockImageUrls']
         # Check if we can get model_dump to extract stockMediaUrls
         elif request_data and hasattr(request_data, 'model_dump'):
             try:
                 model_dict = request_data.model_dump()
-                if 'stockMediaUrls' in model_dict:
+                if 'stockMediaUrls' in model_dict and model_dict['stockMediaUrls'] is not None:
                     logger.info(f"Found stockMediaUrls in model_dump with {len(model_dict['stockMediaUrls'])} entries")
                     stock_media_urls = model_dict['stockMediaUrls']
-                elif 'stockImageUrls' in model_dict:
+                elif 'stockImageUrls' in model_dict and model_dict['stockImageUrls'] is not None:
                     logger.info(f"Found stockImageUrls in model_dump with {len(model_dict['stockImageUrls'])} entries")
                     stock_media_urls = model_dict['stockImageUrls']
             except Exception as e:
@@ -208,34 +215,34 @@ class VideoGenerator:
             stock_image_urls = []
             
             # Try to extract stockImageUrls from model_extra or request.__dict__
-            if hasattr(request, 'model_extra') and 'stockImageUrls' in request.model_extra:
+            if hasattr(request, 'model_extra') and 'stockImageUrls' in request.model_extra and request.model_extra['stockImageUrls'] is not None:
                 stock_image_urls = request.model_extra['stockImageUrls']
                 is_stock_media_direct = True
                 logger.info(f"Found stockImageUrls in model_extra: {stock_image_urls}")
             # Also check for stockMediaUrls (frontend naming convention)
-            elif hasattr(request, 'model_extra') and 'stockMediaUrls' in request.model_extra:
+            elif hasattr(request, 'model_extra') and 'stockMediaUrls' in request.model_extra and request.model_extra['stockMediaUrls'] is not None:
                 stock_image_urls = request.model_extra['stockMediaUrls']
                 is_stock_media_direct = True
                 logger.info(f"Found stockMediaUrls in model_extra: {stock_image_urls}")
             elif hasattr(request, '__dict__'):
                 try:
                     # Try to find it in __dict__
-                    if 'stockImageUrls' in request.__dict__:
+                    if 'stockImageUrls' in request.__dict__ and request.__dict__['stockImageUrls'] is not None:
                         stock_image_urls = request.__dict__['stockImageUrls']
                         is_stock_media_direct = True
                         logger.info(f"Found stockImageUrls in __dict__: {stock_image_urls}")
                     # Check for stockMediaUrls field (frontend naming convention)
-                    elif 'stockMediaUrls' in request.__dict__:
+                    elif 'stockMediaUrls' in request.__dict__ and request.__dict__['stockMediaUrls'] is not None:
                         stock_image_urls = request.__dict__['stockMediaUrls']
                         is_stock_media_direct = True
                         logger.info(f"Found stockMediaUrls in __dict__: {stock_image_urls}")
                     # Also try raw dictionary access (for non-standard attributes)
-                    elif isinstance(request.__dict__.get('_obj'), dict) and 'stockImageUrls' in request.__dict__['_obj']:
+                    elif isinstance(request.__dict__.get('_obj'), dict) and 'stockImageUrls' in request.__dict__['_obj'] and request.__dict__['_obj']['stockImageUrls'] is not None:
                         stock_image_urls = request.__dict__['_obj']['stockImageUrls']
                         is_stock_media_direct = True
                         logger.info(f"Found stockImageUrls in _obj: {stock_image_urls}")
                     # Try alternative field name 
-                    elif isinstance(request.__dict__.get('_obj'), dict) and 'stockMediaUrls' in request.__dict__['_obj']:
+                    elif isinstance(request.__dict__.get('_obj'), dict) and 'stockMediaUrls' in request.__dict__['_obj'] and request.__dict__['_obj']['stockMediaUrls'] is not None:
                         stock_image_urls = request.__dict__['_obj']['stockMediaUrls']
                         is_stock_media_direct = True
                         logger.info(f"Found stockMediaUrls in _obj: {stock_image_urls}")
@@ -246,23 +253,24 @@ class VideoGenerator:
             if not is_stock_media_direct and hasattr(request, 'model_dump'):
                 try:
                     request_dict = request.model_dump()
-                    if 'stockMediaUrls' in request_dict:
+                    if 'stockMediaUrls' in request_dict and request_dict['stockMediaUrls'] is not None:
                         stock_image_urls = request_dict['stockMediaUrls']
                         is_stock_media_direct = True
                         logger.info(f"Found stockMediaUrls in model_dump: {stock_image_urls}")
                 except Exception as e:
                     logger.error(f"Error extracting stockMediaUrls from model_dump: {str(e)}")
 
-            # Handle both list and dictionary formats for stockImageUrls
+            # Handle both list and dictionary formats for stockImageUrls safely
             urls_to_download = []
-            if isinstance(stock_image_urls, dict):
-                logger.info(f"Stock media URLs is a dictionary with {len(stock_image_urls)} items")
-                # It's a map of IDs to URLs, extract just the URLs
-                urls_to_download = list(stock_image_urls.values())
-            elif isinstance(stock_image_urls, list):
-                logger.info("Stock media URLs is a list")
-                # It's already a list of URLs
-                urls_to_download = stock_image_urls
+            if stock_image_urls is not None:
+                if isinstance(stock_image_urls, dict):
+                    logger.info(f"Stock media URLs is a dictionary with {len(stock_image_urls)} items")
+                    # It's a map of IDs to URLs, extract just the URLs
+                    urls_to_download = list(stock_image_urls.values())
+                elif isinstance(stock_image_urls, list):
+                    logger.info("Stock media URLs is a list")
+                    # It's already a list of URLs
+                    urls_to_download = stock_image_urls
             
             # Also look for the skip flag
             skip_user_images = False
@@ -277,8 +285,9 @@ class VideoGenerator:
                 except Exception as e:
                     logger.error(f"Error extracting skipUserImageIds: {str(e)}")
                     
-            # Log for debugging
-            logger.info(f"Direct stock media check: is_stock_media_direct={is_stock_media_direct}, urls_count={len(urls_to_download)}, skip_user_images={skip_user_images}")
+            # Log for debugging - safely get urls_to_download length
+            url_count = len(urls_to_download) if urls_to_download is not None else 0
+            logger.info(f"Direct stock media check: is_stock_media_direct={is_stock_media_direct}, urls_count={url_count}, skip_user_images={skip_user_images}")
                 
             if is_stock_media_direct and urls_to_download and len(urls_to_download) > 0:
                 # Process similar to AI but with direct stock URLs
