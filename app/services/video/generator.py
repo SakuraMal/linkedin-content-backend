@@ -90,9 +90,35 @@ class VideoGenerator:
             
             # Check if we have stockMediaUrls in the request
             stock_media_urls = {}
-            if request and hasattr(request, 'stockMediaUrls') and request.stockMediaUrls:
-                stock_media_urls = request.stockMediaUrls
-                logger.info(f"Found stockMediaUrls in request for {len(stock_media_urls)} stock media items")
+            
+            # Try multiple methods to extract stockMediaUrls from the request
+            if request is not None:
+                # If request is a dict (raw JSON)
+                if isinstance(request, dict) and 'stockMediaUrls' in request:
+                    stock_media_urls = request['stockMediaUrls']
+                    logger.info(f"Found stockMediaUrls in request dict for {len(stock_media_urls)} stock media items")
+                # If request is an object with stockMediaUrls attribute
+                elif hasattr(request, 'stockMediaUrls') and request.stockMediaUrls:
+                    stock_media_urls = request.stockMediaUrls
+                    logger.info(f"Found stockMediaUrls attribute for {len(stock_media_urls)} stock media items")
+                # If it's a Pydantic model or similar with a model_dump/dict method
+                elif hasattr(request, 'model_dump') and callable(getattr(request, 'model_dump')):
+                    request_dict = request.model_dump()
+                    if 'stockMediaUrls' in request_dict:
+                        stock_media_urls = request_dict['stockMediaUrls']
+                        logger.info(f"Found stockMediaUrls in model_dump for {len(stock_media_urls)} stock media items")
+                # If it's a regular object, try __dict__
+                elif hasattr(request, '__dict__'):
+                    request_dict = request.__dict__
+                    if 'stockMediaUrls' in request_dict:
+                        stock_media_urls = request_dict['stockMediaUrls']
+                        logger.info(f"Found stockMediaUrls in __dict__ for {len(stock_media_urls)} stock media items")
+                
+                # Final fallback - log detailed debugging info about the request
+                if not stock_media_urls:
+                    logger.debug(f"Request type: {type(request)}")
+                    logger.debug(f"Request attributes: {dir(request) if hasattr(request, '__dir__') else 'No attributes available'}")
+                    logger.debug(f"Request content: {str(request)[:1000]}")
             
             for image_id in image_ids:
                 # First try to get signed URL for the image from storage
