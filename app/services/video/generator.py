@@ -74,9 +74,9 @@ class VideoGenerator:
             logger.error(f"Error updating job status: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
 
-    def fetch_user_images(self, user_image_ids, request_data=None):
+    def fetch_user_images(self, user_image_ids: list[str], request_data) -> list[str]:
         """
-        Fetch user-uploaded images by their IDs
+        Fetch user-uploaded images based on their IDs.
         
         Args:
             user_image_ids: List of image IDs
@@ -90,9 +90,43 @@ class VideoGenerator:
         
         # Extract stock media URLs from request if available
         stock_media_urls = {}
-        if request_data and 'stockMediaUrls' in request_data:
-            logger.info(f"Found stockMediaUrls in request data with {len(request_data['stockMediaUrls'])} entries")
+        
+        # Check for stockMediaUrls (frontend naming convention)
+        if request_data and hasattr(request_data, '__dict__') and 'stockMediaUrls' in request_data.__dict__:
+            logger.info(f"Found stockMediaUrls in request_data.__dict__ with {len(request_data.__dict__['stockMediaUrls'])} entries")
+            stock_media_urls = request_data.__dict__['stockMediaUrls']
+        # Check for stockImageUrls (backend naming convention)
+        elif request_data and hasattr(request_data, '__dict__') and 'stockImageUrls' in request_data.__dict__:
+            logger.info(f"Found stockImageUrls in request_data.__dict__ with {len(request_data.__dict__['stockImageUrls'])} entries")
+            stock_media_urls = request_data.__dict__['stockImageUrls']
+        # Check if request_data is a dict and has stockMediaUrls
+        elif request_data and isinstance(request_data, dict) and 'stockMediaUrls' in request_data:
+            logger.info(f"Found stockMediaUrls in request_data dict with {len(request_data['stockMediaUrls'])} entries")
             stock_media_urls = request_data['stockMediaUrls']
+        # Check if request_data is a dict and has stockImageUrls
+        elif request_data and isinstance(request_data, dict) and 'stockImageUrls' in request_data:
+            logger.info(f"Found stockImageUrls in request_data dict with {len(request_data['stockImageUrls'])} entries")
+            stock_media_urls = request_data['stockImageUrls']
+        # Check if request_data has model_extra attribute with stockMediaUrls
+        elif request_data and hasattr(request_data, 'model_extra') and 'stockMediaUrls' in request_data.model_extra:
+            logger.info(f"Found stockMediaUrls in request_data.model_extra with {len(request_data.model_extra['stockMediaUrls'])} entries")
+            stock_media_urls = request_data.model_extra['stockMediaUrls']
+        # Check if request_data has model_extra attribute with stockImageUrls
+        elif request_data and hasattr(request_data, 'model_extra') and 'stockImageUrls' in request_data.model_extra:
+            logger.info(f"Found stockImageUrls in request_data.model_extra with {len(request_data.model_extra['stockImageUrls'])} entries")
+            stock_media_urls = request_data.model_extra['stockImageUrls']
+        # Check if we can get model_dump to extract stockMediaUrls
+        elif request_data and hasattr(request_data, 'model_dump'):
+            try:
+                model_dict = request_data.model_dump()
+                if 'stockMediaUrls' in model_dict:
+                    logger.info(f"Found stockMediaUrls in model_dump with {len(model_dict['stockMediaUrls'])} entries")
+                    stock_media_urls = model_dict['stockMediaUrls']
+                elif 'stockImageUrls' in model_dict:
+                    logger.info(f"Found stockImageUrls in model_dump with {len(model_dict['stockImageUrls'])} entries")
+                    stock_media_urls = model_dict['stockImageUrls']
+            except Exception as e:
+                logger.error(f"Error extracting stock URLs from model_dump: {str(e)}")
         
         for image_id in user_image_ids:
             try:
@@ -178,6 +212,11 @@ class VideoGenerator:
                 stock_image_urls = request.model_extra['stockImageUrls']
                 is_stock_media_direct = True
                 logger.info(f"Found stockImageUrls in model_extra: {stock_image_urls}")
+            # Also check for stockMediaUrls (frontend naming convention)
+            elif hasattr(request, 'model_extra') and 'stockMediaUrls' in request.model_extra:
+                stock_image_urls = request.model_extra['stockMediaUrls']
+                is_stock_media_direct = True
+                logger.info(f"Found stockMediaUrls in model_extra: {stock_image_urls}")
             elif hasattr(request, '__dict__'):
                 try:
                     # Try to find it in __dict__
@@ -185,22 +224,43 @@ class VideoGenerator:
                         stock_image_urls = request.__dict__['stockImageUrls']
                         is_stock_media_direct = True
                         logger.info(f"Found stockImageUrls in __dict__: {stock_image_urls}")
+                    # Check for stockMediaUrls field (frontend naming convention)
+                    elif 'stockMediaUrls' in request.__dict__:
+                        stock_image_urls = request.__dict__['stockMediaUrls']
+                        is_stock_media_direct = True
+                        logger.info(f"Found stockMediaUrls in __dict__: {stock_image_urls}")
                     # Also try raw dictionary access (for non-standard attributes)
                     elif isinstance(request.__dict__.get('_obj'), dict) and 'stockImageUrls' in request.__dict__['_obj']:
                         stock_image_urls = request.__dict__['_obj']['stockImageUrls']
                         is_stock_media_direct = True
                         logger.info(f"Found stockImageUrls in _obj: {stock_image_urls}")
+                    # Try alternative field name 
+                    elif isinstance(request.__dict__.get('_obj'), dict) and 'stockMediaUrls' in request.__dict__['_obj']:
+                        stock_image_urls = request.__dict__['_obj']['stockMediaUrls']
+                        is_stock_media_direct = True
+                        logger.info(f"Found stockMediaUrls in _obj: {stock_image_urls}")
                 except Exception as e:
-                    logger.error(f"Error extracting stockImageUrls from __dict__: {str(e)}")
+                    logger.error(f"Error extracting stock media URLs from __dict__: {str(e)}")
+                    
+            # Also try the additional data passed to the function
+            if not is_stock_media_direct and hasattr(request, 'model_dump'):
+                try:
+                    request_dict = request.model_dump()
+                    if 'stockMediaUrls' in request_dict:
+                        stock_image_urls = request_dict['stockMediaUrls']
+                        is_stock_media_direct = True
+                        logger.info(f"Found stockMediaUrls in model_dump: {stock_image_urls}")
+                except Exception as e:
+                    logger.error(f"Error extracting stockMediaUrls from model_dump: {str(e)}")
 
             # Handle both list and dictionary formats for stockImageUrls
             urls_to_download = []
             if isinstance(stock_image_urls, dict):
-                logger.info(f"stockImageUrls is a dictionary with {len(stock_image_urls)} items")
+                logger.info(f"Stock media URLs is a dictionary with {len(stock_image_urls)} items")
                 # It's a map of IDs to URLs, extract just the URLs
                 urls_to_download = list(stock_image_urls.values())
             elif isinstance(stock_image_urls, list):
-                logger.info("stockImageUrls is a list")
+                logger.info("Stock media URLs is a list")
                 # It's already a list of URLs
                 urls_to_download = stock_image_urls
             
