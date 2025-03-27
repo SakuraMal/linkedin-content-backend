@@ -166,43 +166,106 @@ class VideoGenerator:
             # Update status to processing
             self.update_job_status(redis_client, job_id, "initialized", progress=0)
             
-            # Extract request data
-            request_data = request.model_dump()
-            
-            # Get user-provided image IDs if any
-            user_image_ids = request_data.get('user_image_ids', [])
-            
             # Monitor memory usage before fetching images
             logger.info(f"Memory before fetching images: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+
+            # Check if this is a direct stock media request (new approach)
+            is_stock_media_direct = False
+            stock_image_urls = []
             
-            # Handle user-provided images if any
-            image_files = []
-            if user_image_ids:
-                logger.info(f"Using user-provided images: {user_image_ids}")
+            # Try to extract stockImageUrls from model_extra or request.__dict__
+            if hasattr(request, 'model_extra') and 'stockImageUrls' in request.model_extra:
+                stock_image_urls = request.model_extra['stockImageUrls']
+                is_stock_media_direct = True
+                logger.info(f"Found stockImageUrls in model_extra: {len(stock_image_urls)} URLs")
+            elif hasattr(request, '__dict__'):
+                try:
+                    # Try to find it in __dict__
+                    if 'stockImageUrls' in request.__dict__:
+                        stock_image_urls = request.__dict__['stockImageUrls']
+                        is_stock_media_direct = True
+                        logger.info(f"Found stockImageUrls in __dict__: {len(stock_image_urls)} URLs")
+                    # Also try raw dictionary access (for non-standard attributes)
+                    elif isinstance(request.__dict__.get('_obj'), dict) and 'stockImageUrls' in request.__dict__['_obj']:
+                        stock_image_urls = request.__dict__['_obj']['stockImageUrls']
+                        is_stock_media_direct = True
+                        logger.info(f"Found stockImageUrls in _obj: {len(stock_image_urls)} URLs")
+                except Exception as e:
+                    logger.error(f"Error extracting stockImageUrls from __dict__: {str(e)}")
+                    
+            # Also look for the skip flag
+            skip_user_images = False
+            if hasattr(request, 'model_extra') and 'skipUserImageIds' in request.model_extra:
+                skip_user_images = request.model_extra['skipUserImageIds']
+            elif hasattr(request, '__dict__'):
+                try:
+                    if 'skipUserImageIds' in request.__dict__:
+                        skip_user_images = request.__dict__['skipUserImageIds']
+                    elif isinstance(request.__dict__.get('_obj'), dict) and 'skipUserImageIds' in request.__dict__['_obj']:
+                        skip_user_images = request.__dict__['_obj']['skipUserImageIds']
+                except Exception as e:
+                    logger.error(f"Error extracting skipUserImageIds: {str(e)}")
+                    
+            # Log for debugging
+            logger.info(f"Direct stock media check: is_stock_media_direct={is_stock_media_direct}, urls_count={len(stock_image_urls)}, skip_user_images={skip_user_images}")
+                
+            if is_stock_media_direct and stock_image_urls and len(stock_image_urls) > 0:
+                # Process similar to AI but with direct stock URLs
+                logger.info(f"Using direct stock media URLs approach with {len(stock_image_urls)} URLs")
                 self.update_job_status(redis_client, job_id, "fetching_user_images", progress=5)
                 
-                # Fetch user-provided images, passing the full request_data
-                image_files = self.fetch_user_images(user_image_ids, request_data)
+                # Download all stock images directly
+                stock_image_paths = []
+                for url in stock_image_urls:
+                    logger.info(f"Downloading stock image from URL: {url}")
+                    local_path = media_fetcher.download_file(url)
+                    if local_path:
+                        stock_image_paths.append(local_path)
+                        temp_files.append(local_path)
+                        logger.info(f"Downloaded stock image to {local_path}")
+                    else:
+                        logger.error(f"Failed to download stock image from {url}")
+                
+                if not stock_image_paths:
+                    error_msg = "Failed to download any stock images"
+                    logger.error(error_msg)
+                    self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+                    raise Exception(error_msg)
+                
+                logger.info(f"Successfully downloaded {len(stock_image_paths)} stock images")
+                self.update_job_status(redis_client, job_id, "user_images_fetched", progress=10)
+                
+                # Create media assets object with stock images (similar to user images)
+                media_assets = {'images': stock_image_paths, 'videos': []}
+                self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
+                
+            # Determine if we're using user-provided images
+            elif hasattr(request, 'user_image_ids') and request.user_image_ids and len(request.user_image_ids) > 0 and not skip_user_images:
+                logger.info(f"Using user-provided images: {request.user_image_ids}")
+                self.update_job_status(redis_client, job_id, "fetching_user_images", progress=5)
+                
+                # Fetch user images and create media assets object  
+                user_image_paths = self.fetch_user_images(request.user_image_ids, request)
                 
                 # Track user image paths for cleanup
-                temp_files.extend(image_files)
+                temp_files.extend(user_image_paths)
                 
-                if not image_files:
+                if not user_image_paths:
                     error_msg = "Failed to fetch any user-provided images"
                     logger.error(error_msg)
                     self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                     raise Exception(error_msg)
                 
-                logger.info(f"Successfully fetched {len(image_files)} user images")
+                logger.info(f"Successfully fetched {len(user_image_paths)} user images")
                 self.update_job_status(redis_client, job_id, "user_images_fetched", progress=10)
                 
                 # Create media assets object with user images
-                media_assets = {'images': image_files, 'videos': []}
+                media_assets = {'images': user_image_paths, 'videos': []}
                 self.update_job_status(redis_client, job_id, "media_fetched", progress=20)
                 
             else:
-                # Fall back to fetching media from Unsplash
-                logger.info(f"No user images provided, fetching media assets for content: {request.content}")
+                # Fall back to fetching media from Unsplash (AI approach)
+                logger.info(f"No user or stock images provided, fetching media assets for content: {request.content}")
                 self.update_job_status(redis_client, job_id, "media_fetching", progress=10)
                 
                 media_assets = media_fetcher.fetch_media(request.content, duration=request.duration)
