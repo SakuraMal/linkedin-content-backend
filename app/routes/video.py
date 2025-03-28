@@ -135,6 +135,15 @@ def generate_video():
                 if key in request_data:
                     request_data_normalized[key] = request_data[key]
             
+            # Add stock media URL fields if they exist in the request (needed for stock media videos)
+            if "stockMediaUrls" in request_data:
+                request_data_normalized["stockMediaUrls"] = request_data["stockMediaUrls"]
+                logging.info(f"Found stockMediaUrls in request with {len(request_data['stockMediaUrls'])} entries")
+                
+            if "stockImageUrls" in request_data:
+                request_data_normalized["stockImageUrls"] = request_data["stockImageUrls"]
+                logging.info(f"Found stockImageUrls in request with {len(request_data['stockImageUrls'])} entries")
+            
             # Handle nested structures and camelCase vs snake_case issues
             if "audioPreferences" in request_data:
                 request_data_normalized["audioPreferences"] = request_data["audioPreferences"]
