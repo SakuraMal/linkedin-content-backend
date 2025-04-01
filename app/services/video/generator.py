@@ -17,6 +17,8 @@ import shutil
 import tempfile
 import psutil
 import requests
+from .caption_renderer import CaptionRenderer
+from ...config import is_feature_enabled
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
@@ -515,6 +517,120 @@ class VideoGenerator:
                 
                 # Clean up temporary files
                 self.cleanup_temp_files(temp_files)
+                
+                # After the video is generated but before it's returned, add caption rendering
+                try:
+                    # Extract caption preferences from request
+                    captions_enabled = False
+                    caption_prefs = None
+                    caption_timing = None
+                    
+                    # Check if videoPreferences.captions exists in the request
+                    if hasattr(request, 'videoPreferences') and request.videoPreferences:
+                        if hasattr(request.videoPreferences, 'captions') and request.videoPreferences.captions:
+                            captions_enabled = request.videoPreferences.captions.enabled
+                            caption_prefs = request.videoPreferences.captions.dict() if hasattr(request.videoPreferences.captions, 'dict') else request.videoPreferences.captions
+                            caption_timing = getattr(request.videoPreferences.captions, 'timing', None)
+                            logger.info(f"Found captions in videoPreferences: enabled={captions_enabled}, has_timing={caption_timing is not None}")
+                            if caption_timing:
+                                logger.info(f"Caption timing data: {len(caption_timing)} segments")
+                                # Log first segment sample
+                                if len(caption_timing) > 0:
+                                    first_segment = caption_timing[0]
+                                    caption_chunks = getattr(first_segment, 'captionChunks', [])
+                                    logger.info(f"First segment caption chunks: {len(caption_chunks)} chunks")
+                                    if caption_chunks and len(caption_chunks) > 0:
+                                        logger.info(f"First caption chunk sample: {caption_chunks[0]}")
+
+                    # Also check in model_extra for captions
+                    elif hasattr(request, 'model_extra') and request.model_extra:
+                        if 'videoPreferences' in request.model_extra and request.model_extra['videoPreferences']:
+                            video_prefs = request.model_extra['videoPreferences']
+                            if isinstance(video_prefs, dict) and 'captions' in video_prefs:
+                                captions_enabled = video_prefs['captions'].get('enabled', False)
+                                caption_prefs = video_prefs['captions']
+                                caption_timing = video_prefs['captions'].get('timing', None)
+                                logger.info(f"Found captions in model_extra: enabled={captions_enabled}, has_timing={caption_timing is not None}")
+                                if caption_timing:
+                                    logger.info(f"Caption timing data from model_extra: {len(caption_timing)} segments")
+                    
+                    # Look for contentAnalysis data if timing is not found
+                    if not caption_timing and hasattr(request, 'contentAnalysis') and request.contentAnalysis:
+                        logger.info("Looking for caption timing in contentAnalysis")
+                        if hasattr(request.contentAnalysis, 'segments') and request.contentAnalysis.segments:
+                            segments = request.contentAnalysis.segments
+                            logger.info(f"Found {len(segments)} segments in contentAnalysis")
+                            
+                            # Check if any segment has timing with captionChunks
+                            has_caption_chunks = False
+                            for i, segment in enumerate(segments):
+                                if hasattr(segment, 'timing') and segment.timing:
+                                    if hasattr(segment.timing, 'captionChunks') and segment.timing.captionChunks:
+                                        has_caption_chunks = True
+                                        logger.info(f"Segment {i} has {len(segment.timing.captionChunks)} caption chunks")
+                                        # Log first chunk sample
+                                        if len(segment.timing.captionChunks) > 0:
+                                            first_chunk = segment.timing.captionChunks[0]
+                                            logger.info(f"First chunk sample: {first_chunk}")
+                                        break
+                            
+                            if not has_caption_chunks:
+                                logger.warning("No captionChunks found in contentAnalysis segments")
+                    
+                    # If captions are enabled, apply them to the video
+                    if captions_enabled:
+                        logger.info(f"Caption rendering enabled for job {job_id}")
+                        feature_flag_enabled = is_feature_enabled("ENABLE_CAPTIONS")
+                        logger.info(f"ENABLE_CAPTIONS feature flag: {feature_flag_enabled}")
+                        
+                        # Create caption renderer
+                        caption_renderer = CaptionRenderer(captions_enabled=captions_enabled, caption_prefs=caption_prefs)
+                        
+                        # Prepare caption data
+                        caption_data = {
+                            "timing": caption_timing
+                        }
+                        
+                        # If we're using caption timing from content analysis
+                        if not caption_timing and hasattr(request, 'contentAnalysis') and request.contentAnalysis:
+                            if hasattr(request.contentAnalysis, 'segments') and request.contentAnalysis.segments:
+                                caption_data["timing"] = request.contentAnalysis.segments
+                                logger.info(f"Using timing data from content analysis for job {job_id}")
+                        
+                        # Apply captions to the video
+                        if caption_data["timing"]:
+                            logger.info(f"Applying captions to video for job {job_id}")
+                            logger.info(f"Caption data timing count: {len(caption_data['timing'])}")
+                            
+                            # Extra logging for caption data
+                            for i, timing in enumerate(caption_data["timing"]):
+                                if hasattr(timing, 'captionChunks') and timing.captionChunks:
+                                    logger.info(f"Timing {i} has {len(timing.captionChunks)} caption chunks")
+                                else:
+                                    logger.warning(f"Timing {i} has no captionChunks")
+                            
+                            # Attempt to apply captions
+                            captioned_video = caption_renderer.render_captions(
+                                final_video,
+                                caption_data,
+                                os.path.dirname(final_video)
+                            )
+                            
+                            if captioned_video and captioned_video != final_video:
+                                logger.info(f"Successfully applied captions to video for job {job_id}")
+                                # Update final video path
+                                final_video = captioned_video
+                                # Also add the new file to temp_files for cleanup
+                                temp_files.append(captioned_video)
+                            else:
+                                logger.warning(f"Caption renderer returned original video for job {job_id}, captions may not have been applied")
+                        else:
+                            logger.warning(f"No caption timing data available for job {job_id}, skipping caption rendering")
+                
+                except Exception as e:
+                    logger.error(f"Error applying captions to video for job {job_id}: {str(e)}")
+                    logger.error(f"Caption error traceback: {traceback.format_exc()}")
+                    # Continue with original video if caption rendering fails
                 
                 return video_url
             except Exception as upload_error:
