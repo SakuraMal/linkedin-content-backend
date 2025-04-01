@@ -10,7 +10,7 @@ from typing import Dict, Any
 # Feature flags with default values
 FEATURE_FLAGS: Dict[str, Any] = {
     # Video caption rendering feature
-    "ENABLE_CAPTIONS": os.environ.get("ENABLE_CAPTIONS", "false").lower() in ("true", "1", "yes"),
+    "ENABLE_CAPTIONS": os.environ.get("ENABLE_CAPTIONS", "true").lower() in ("true", "1", "yes"),
     
     # Debugging features
     "DEBUG_LOGGING": os.environ.get("DEBUG_LOGGING", "false").lower() in ("true", "1", "yes"),
