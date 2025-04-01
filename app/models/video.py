@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, HttpUrl
 from typing import List, Literal, Optional, Dict, Any, Union
 from enum import Enum
+from .captions import CaptionPreferences
 
 class MediaItem(BaseModel):
     type: Literal["image"] = "image"
@@ -40,6 +41,17 @@ class ContentAnalysis(BaseModel):
     class Config:
         extra = "allow"
 
+class VideoPreferences(BaseModel):
+    """Video generation preferences including styling, transitions, and captions."""
+    requirePexelsVideo: Optional[bool] = Field(default=True, description="Whether to require Pexels videos")
+    minVideoSegments: Optional[int] = Field(default=2, description="Minimum number of video segments")
+    transitionStyle: Optional[str] = Field(default="crossfade", description="Style of transitions between segments")
+    audio: Optional[Dict[str, Any]] = Field(default=None, description="Audio preferences")
+    captions: Optional[CaptionPreferences] = Field(default=None, description="Caption preferences and styling")
+    
+    class Config:
+        extra = "allow"
+
 class VideoRequest(BaseModel):
     """Request model for video generation."""
     content: str = Field(..., description="Text description of the video content")
@@ -50,10 +62,13 @@ class VideoRequest(BaseModel):
     transitionPreferences: Optional[TransitionPreferences] = Field(default=None, description="Video transition preferences")
     user_image_ids: Optional[List[str]] = Field(default=None, description="List of IDs for user-uploaded images to use in the video")
     content_analysis: Optional[ContentAnalysis] = Field(default=None, description="Content analysis results for better video generation")
+    contentAnalysis: Optional[ContentAnalysis] = Field(default=None, description="Alternative field name for content analysis")
     theme: Optional[str] = Field(default="business", description="Theme of the content")
     # Add explicit fields for stock media URLs mapping (supporting both naming conventions)
     stockMediaUrls: Optional[Dict[str, str]] = Field(default=None, description="Mapping of stock media IDs to their URLs")
     stockImageUrls: Optional[Dict[str, str]] = Field(default=None, description="Alternative name for stockMediaUrls")
+    # Add videoPreferences field that will contain caption preferences
+    videoPreferences: Optional[VideoPreferences] = Field(default=None, description="Video styling and caption preferences")
     
     class Config:
         # Allow unknown fields to handle different frontend formats
