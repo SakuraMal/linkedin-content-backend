@@ -172,11 +172,26 @@ black .
 
 ## Deployment
 
-The service is deployed on Fly.io:
+This application is deployed to Fly.io using GitHub Actions. Each push to the main branch 
+triggers an automatic deployment.
+
+### Manual Deployment
+
+To deploy manually:
 
 ```bash
 flyctl deploy
 ```
+
+### Troubleshooting Deployment
+
+If you encounter errors during deployment:
+
+1. Ensure you're authenticated with Fly.io: `flyctl auth login`
+2. Check your Fly.io token: `flyctl auth token`
+3. Verify the application is configured correctly: `flyctl status`
+
+For more information, see the [Fly.io documentation](https://fly.io/docs/hands-on/).
 
 ## Architecture
 
