@@ -600,32 +600,49 @@ class VideoGenerator:
                         # Apply captions to the video
                         if caption_data["timing"]:
                             logger.info(f"Applying captions to video for job {job_id}")
-                            logger.info(f"Caption data timing count: {len(caption_data['timing'])}")
+                            logger.info(f"Caption data timing has {len(caption_data['timing'])} entries")
                             
-                            # Extra logging for caption data
-                            for i, timing in enumerate(caption_data["timing"]):
-                                if hasattr(timing, 'captionChunks') and timing.captionChunks:
-                                    logger.info(f"Timing {i} has {len(timing.captionChunks)} caption chunks")
+                            try:
+                                temp_dir = tempfile.gettempdir()
+                                captioned_video = caption_renderer.render_captions(
+                                    video_path=final_video, 
+                                    caption_data=caption_data, 
+                                    work_dir=temp_dir
+                                )
+                                
+                                if captioned_video and captioned_video != final_video:
+                                    logger.info(f"Successfully applied captions to video for job {job_id}")
+                                    final_video = captioned_video
                                 else:
-                                    logger.warning(f"Timing {i} has no captionChunks")
-                            
-                            # Attempt to apply captions
-                            captioned_video = caption_renderer.render_captions(
-                                final_video,
-                                caption_data,
-                                os.path.dirname(final_video)
-                            )
-                            
-                            if captioned_video and captioned_video != final_video:
-                                logger.info(f"Successfully applied captions to video for job {job_id}")
-                                # Update final video path
-                                final_video = captioned_video
-                                # Also add the new file to temp_files for cleanup
-                                temp_files.append(captioned_video)
-                            else:
-                                logger.warning(f"Caption renderer returned original video for job {job_id}, captions may not have been applied")
+                                    logger.warning(f"Caption renderer returned original video, captions may not have been applied")
+                            except Exception as e:
+                                logger.error(f"Error applying captions: {str(e)}")
+                                # Continue without captions
                         else:
-                            logger.warning(f"No caption timing data available for job {job_id}, skipping caption rendering")
+                            # If we have caption preferences but no timing data, try to generate timing from content
+                            logger.info(f"No caption timing data available, will generate from content for job {job_id}")
+                            content_text = request.content if hasattr(request, 'content') else None
+                            
+                            if content_text:
+                                try:
+                                    temp_dir = tempfile.gettempdir()
+                                    captioned_video = caption_renderer.render_captions(
+                                        video_path=final_video, 
+                                        caption_data=caption_data, 
+                                        work_dir=temp_dir,
+                                        content=content_text
+                                    )
+                                    
+                                    if captioned_video and captioned_video != final_video:
+                                        logger.info(f"Successfully applied auto-generated captions to video for job {job_id}")
+                                        final_video = captioned_video
+                                    else:
+                                        logger.warning(f"Caption renderer with auto-generated timing returned original video")
+                                except Exception as e:
+                                    logger.error(f"Error applying auto-generated captions: {str(e)}")
+                                    # Continue without captions
+                            else:
+                                logger.warning(f"No content available for caption generation for job {job_id}")
                 
                 except Exception as e:
                     logger.error(f"Error applying captions to video for job {job_id}: {str(e)}")

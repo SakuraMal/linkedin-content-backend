@@ -9,6 +9,8 @@ import os
 import logging
 import subprocess
 import tempfile
+import re
+import traceback
 from typing import Dict, List, Optional, Any
 from ...config import is_feature_enabled
 from ...models.captions import CaptionPreferences, CaptionTiming
@@ -46,12 +48,12 @@ class CaptionRenderer:
         if self.enabled:
             logger.info(f"Caption preferences: {self.prefs}")
     
-    def generate_subtitle_file(self, timing_data: List[CaptionTiming], output_path: str) -> str:
+    def generate_subtitle_file(self, timing_data: List[Any], output_path: str) -> str:
         """
         Generate an SRT subtitle file from timing data.
         
         Args:
-            timing_data: List of caption timing data
+            timing_data: List of caption timing data (can be objects or dictionaries)
             output_path: Directory to save the subtitle file
             
         Returns:
@@ -71,15 +73,31 @@ class CaptionRenderer:
                 
                 # Process all caption chunks from all timing segments
                 for segment in timing_data:
-                    for chunk in segment.captionChunks:
+                    # Handle both object and dictionary formats
+                    if isinstance(segment, dict):
+                        caption_chunks = segment.get('captionChunks', [])
+                    else:
+                        caption_chunks = getattr(segment, 'captionChunks', [])
+                    
+                    for chunk in caption_chunks:
+                        # Handle both object and dictionary formats for chunks
+                        if isinstance(chunk, dict):
+                            start_time = chunk.get('startTime', 0)
+                            end_time = chunk.get('endTime', 0)
+                            text = chunk.get('text', '')
+                        else:
+                            start_time = getattr(chunk, 'startTime', 0)
+                            end_time = getattr(chunk, 'endTime', 0)
+                            text = getattr(chunk, 'text', '')
+                        
                         # Convert seconds to SRT time format (HH:MM:SS,mmm)
-                        start_time = self._format_srt_time(chunk.startTime)
-                        end_time = self._format_srt_time(chunk.endTime)
+                        start_time_fmt = self._format_srt_time(start_time)
+                        end_time_fmt = self._format_srt_time(end_time)
                         
                         # Write SRT entry
                         f.write(f"{subtitle_index}\n")
-                        f.write(f"{start_time} --> {end_time}\n")
-                        f.write(f"{chunk.text}\n\n")
+                        f.write(f"{start_time_fmt} --> {end_time_fmt}\n")
+                        f.write(f"{text}\n\n")
                         
                         subtitle_index += 1
             
@@ -88,6 +106,7 @@ class CaptionRenderer:
             
         except Exception as e:
             logger.error(f"Error generating subtitle file: {str(e)}")
+            traceback.print_exc()
             # Return empty path but don't fail the video generation
             return ""
     
@@ -101,14 +120,12 @@ class CaptionRenderer:
         Returns:
             Formatted time string
         """
-        # Calculate hours, minutes, seconds and milliseconds
         hours = int(seconds / 3600)
         minutes = int((seconds % 3600) / 60)
-        secs = int(seconds % 60)
-        msecs = int((seconds - int(seconds)) * 1000)
+        seconds = seconds % 60
+        milliseconds = int((seconds - int(seconds)) * 1000)
         
-        # Format as HH:MM:SS,mmm
-        return f"{hours:02d}:{minutes:02d}:{secs:02d},{msecs:03d}"
+        return f"{hours:02d}:{minutes:02d}:{int(seconds):02d},{milliseconds:03d}"
     
     def apply_captions_to_video(self, video_path: str, subtitle_file: str, output_path: str) -> str:
         """
@@ -175,7 +192,106 @@ class CaptionRenderer:
             logger.error(f"Error applying captions to video: {str(e)}")
             return video_path  # Return original video if captioning fails
 
-    def render_captions(self, video_path: str, caption_data: Dict[str, Any], work_dir: str) -> str:
+    def generate_timing_from_content(self, content: str) -> List[dict]:
+        """
+        Generate caption timing data from content text.
+        
+        This is used when timing data is not provided by the frontend.
+        It splits the content into segments and generates timing information.
+        
+        Args:
+            content: The content text for the video
+            
+        Returns:
+            List of caption timing segments with caption chunks
+        """
+        logger.info("Generating caption timing data from content")
+        
+        # Constants for timing calculation
+        words_per_second = 2.5  # Average reading speed
+        max_words_per_caption = 10  # For readability
+        
+        # Split content into sentences
+        sentences = re.split(r'[.!?]+', content)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if not sentences:
+            logger.warning("No sentences found in content")
+            return []
+        
+        # Simple algorithm to segment content
+        total_sentences = len(sentences)
+        segments = []
+        current_time = 0.0
+        
+        # Create segments (intro, main, conclusion)
+        segment_types = ["intro", "main", "conclusion"]
+        
+        # Calculate roughly how many sentences per segment
+        if total_sentences < 3:
+            # If very short content, just make everything main
+            segment_distribution = [0, total_sentences, 0]
+        else:
+            # Approximately 20% intro, 60% main, 20% conclusion
+            intro_count = max(1, int(total_sentences * 0.2))
+            conclusion_count = max(1, int(total_sentences * 0.2))
+            main_count = total_sentences - intro_count - conclusion_count
+            segment_distribution = [intro_count, main_count, conclusion_count]
+        
+        # Track sentence index
+        sentence_index = 0
+        
+        # Create each segment
+        for segment_type, sentence_count in zip(segment_types, segment_distribution):
+            if sentence_count <= 0:
+                continue
+                
+            # Get sentences for this segment
+            segment_sentences = sentences[sentence_index:sentence_index+sentence_count]
+            sentence_index += sentence_count
+            
+            if not segment_sentences:
+                continue
+                
+            # Join sentences for this segment
+            segment_text = ". ".join(segment_sentences)
+            if not segment_text.endswith("."):
+                segment_text += "."
+                
+            # Calculate timing
+            words = segment_text.split()
+            word_count = len(words)
+            duration = word_count / words_per_second
+            
+            # Create caption chunks
+            caption_chunks = []
+            for i in range(0, word_count, max_words_per_caption):
+                chunk_words = words[i:i+max_words_per_caption]
+                chunk_text = " ".join(chunk_words)
+                chunk_duration = len(chunk_words) / words_per_second
+                
+                caption_chunks.append({
+                    "text": chunk_text,
+                    "startTime": current_time + (i / max_words_per_caption) * chunk_duration,
+                    "endTime": current_time + ((i / max_words_per_caption) + 1) * chunk_duration
+                })
+            
+            # Add segment
+            segments.append({
+                "type": segment_type,
+                "startTime": current_time,
+                "endTime": current_time + duration,
+                "duration": duration,
+                "captionChunks": caption_chunks
+            })
+            
+            # Update current time
+            current_time += duration
+        
+        logger.info(f"Generated {len(segments)} segments with {sum(len(s['captionChunks']) for s in segments)} caption chunks")
+        return segments
+    
+    def render_captions(self, video_path: str, caption_data: Dict[str, Any], work_dir: str, content: str = None) -> str:
         """
         Render captions onto a video.
         
@@ -185,6 +301,7 @@ class CaptionRenderer:
             video_path: Path to the input video
             caption_data: Dictionary containing caption preferences and timing data
             work_dir: Working directory for temporary files
+            content: Optional content text for generating timing if not provided
             
         Returns:
             Path to the output video with captions
@@ -197,8 +314,13 @@ class CaptionRenderer:
             # Extract timing data from caption data
             timing_data = caption_data.get("timing", [])
             
-            if not timing_data:
-                logger.warning("No caption timing data found, cannot add captions")
+            # If no timing data is provided but we have content, generate timing data
+            if (not timing_data or len(timing_data) == 0) and content:
+                logger.info("No caption timing data found, generating from content")
+                timing_data = self.generate_timing_from_content(content)
+                
+            if not timing_data or len(timing_data) == 0:
+                logger.warning("No caption timing data found and no content provided, cannot add captions")
                 return video_path
                 
             # Log caption rendering start
@@ -218,4 +340,5 @@ class CaptionRenderer:
             
         except Exception as e:
             logger.error(f"Error rendering captions: {str(e)}")
+            traceback.print_exc()
             return video_path  # Return original video if captioning fails 
