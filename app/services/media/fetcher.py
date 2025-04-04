@@ -136,7 +136,7 @@ class MediaFetcher:
             Content: {content}"""
             
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",  # Using GPT-4 for better understanding and specificity
+                model="gpt-3.5-turbo",  # Using GPT-3.5-turbo for cost efficiency while maintaining good results
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=200
