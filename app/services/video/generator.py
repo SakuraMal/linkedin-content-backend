@@ -429,27 +429,45 @@ class VideoGenerator:
                 logger.error(error_msg)
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
-                
-            # Use all available images
-            target_num_images = num_images
-            
-            # Calculate duration per image to fill the total duration
-            segment_duration = request.duration / num_images
-            
-            # Set a more reasonable minimum duration per image (1 second)
-            MIN_DURATION_PER_IMAGE = 1.0
-            if segment_duration < MIN_DURATION_PER_IMAGE:
-                # If we can't fit all images with minimum duration, use all images anyway
-                # but log a warning
-                logger.warning(f"Warning: Using {num_images} images with {segment_duration:.2f}s per image, which is less than minimum recommended duration")
-            
-            durations = [segment_duration] * num_images
-            logger.info(f"Using {num_images} images with {segment_duration:.2f}s per image")
             
             # Get transition preferences
             transition_prefs = request.transitionPreferences
             transition_duration = transition_prefs.duration if transition_prefs else 0.5
             transition_style = transition_prefs.defaultStyle if transition_prefs else None
+            
+            # Calculate total transition time (transitions between images)
+            total_transition_time = (num_images - 1) * transition_duration
+            
+            # Calculate available time for images (total duration minus transitions)
+            available_image_time = request.duration - total_transition_time
+            
+            # Calculate duration per image
+            segment_duration = available_image_time / num_images
+            
+            # Set a minimum duration per image (1 second)
+            MIN_DURATION_PER_IMAGE = 1.0
+            if segment_duration < MIN_DURATION_PER_IMAGE:
+                # If we can't fit all images with minimum duration, adjust the number of images
+                max_images = int(available_image_time / MIN_DURATION_PER_IMAGE)
+                if max_images < 1:
+                    error_msg = f"Cannot create video: requested duration {request.duration}s is too short for transitions"
+                    logger.error(error_msg)
+                    self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+                    raise Exception(error_msg)
+                
+                # Use only the maximum number of images that can fit
+                num_images = max_images
+                segment_duration = MIN_DURATION_PER_IMAGE
+                logger.warning(f"Adjusted to use {num_images} images with {segment_duration:.2f}s per image to meet minimum duration requirements")
+            
+            # Create durations array
+            durations = [segment_duration] * num_images
+            
+            # Log the calculated durations
+            total_video_duration = sum(durations) + total_transition_time
+            logger.info(f"Using {num_images} images with {segment_duration:.2f}s per image")
+            logger.info(f"Total video duration: {total_video_duration:.2f}s (requested: {request.duration}s)")
+            logger.info(f"Total transition time: {total_transition_time:.2f}s")
             
             # Create video segments with transitions
             video_segments = media_processor.create_video_segments(
