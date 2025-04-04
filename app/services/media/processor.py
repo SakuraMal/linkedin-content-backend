@@ -323,10 +323,18 @@ class MediaProcessor:
             logger.info(f"Processing audio file: {audio_path}")
             audio = AudioFileClip(audio_path)
             
-            # Ensure audio duration matches video duration
-            if audio.duration > final_video.duration:
-                logger.info(f"Trimming audio from {audio.duration}s to {final_video.duration}s")
-                audio = audio.set_duration(final_video.duration)
+            # Ensure video duration matches audio duration
+            if final_video.duration < audio.duration:
+                logger.info(f"Extending video from {final_video.duration}s to {audio.duration}s")
+                # Create a black background clip for the remaining duration
+                remaining_duration = audio.duration - final_video.duration
+                bg = ColorClip(self.target_resolution, color=(0,0,0))
+                bg = bg.set_duration(remaining_duration)
+                # Concatenate the original video with the background
+                final_video = concatenate_videoclips([final_video, bg])
+            elif final_video.duration > audio.duration:
+                logger.info(f"Trimming video from {final_video.duration}s to {audio.duration}s")
+                final_video = final_video.subclip(0, audio.duration)
                 
             # Add audio to video
             final_video = final_video.set_audio(audio)
