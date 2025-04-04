@@ -430,25 +430,18 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
                 
-            # For a 15-second video, we want 5-7 images
-            # For longer videos, scale up proportionally but cap at 10 images
-            target_num_images = min(max(5, round(request.duration / 3)), 10)
-            
-            # If we have too many images, only use the first target_num_images
-            if num_images > target_num_images:
-                media_assets['images'] = media_assets['images'][:target_num_images]
-                num_images = target_num_images
+            # Use all available images
+            target_num_images = num_images
             
             # Calculate duration per image to fill the total duration
             segment_duration = request.duration / num_images
             
-            # Ensure minimum duration of 3 seconds per image
-            MIN_DURATION_PER_IMAGE = 3.0
+            # Set a more reasonable minimum duration per image (1 second)
+            MIN_DURATION_PER_IMAGE = 1.0
             if segment_duration < MIN_DURATION_PER_IMAGE:
-                # Recalculate with fewer images if needed
-                num_images = min(num_images, math.floor(request.duration / MIN_DURATION_PER_IMAGE))
-                media_assets['images'] = media_assets['images'][:num_images]
-                segment_duration = request.duration / num_images
+                # If we can't fit all images with minimum duration, use all images anyway
+                # but log a warning
+                logger.warning(f"Warning: Using {num_images} images with {segment_duration:.2f}s per image, which is less than minimum recommended duration")
             
             durations = [segment_duration] * num_images
             logger.info(f"Using {num_images} images with {segment_duration:.2f}s per image")
