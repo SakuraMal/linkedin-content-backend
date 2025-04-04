@@ -244,81 +244,49 @@ class MediaProcessor:
                             media_files: Dict[str, List[str]], 
                             durations: List[float],
                             video_style: VideoStyle = VideoStyle.PROFESSIONAL,
-                            transition_duration: Optional[float] = None) -> List[Union[ImageClip, VideoFileClip]]:
+                            transition_duration: Optional[float] = None,
+                            transition_style: Optional[TransitionStyle] = None) -> List[Union[ImageClip, VideoFileClip]]:
         """
-        Create video segments from processed images and videos with AI-driven transitions.
+        Create video segments from media files with transitions.
         
         Args:
-            media_files: Dictionary containing paths to media files
-            durations: List of durations for each media item
-            video_style: Style of the video for transition selection
-            transition_duration: Optional override for transition duration
+            media_files: Dictionary containing lists of image and video paths
+            durations: List of durations for each segment
+            video_style: Style of the video
+            transition_duration: Duration of transitions in seconds
+            transition_style: User's chosen transition style
             
         Returns:
-            List[Union[ImageClip, VideoFileClip]]: List of processed video segments
+            List of video clips with transitions
         """
         try:
-            clips = []
-            total_duration = 0
-            
             # Use provided transition duration or default
-            trans_duration = transition_duration or self.transition_duration
+            transition_duration = transition_duration or self.transition_duration
             
-            # Process images first
-            image_paths = media_files.get('images', [])
-            video_paths = media_files.get('videos', [])
-            
-            # Calculate durations for each type
-            total_media = len(image_paths) + len(video_paths)
-            if total_media == 0:
-                raise ValueError("No media files provided")
-            
-            # Interleave images and videos
-            media_items = []
-            i, j = 0, 0
-            while i < len(image_paths) or j < len(video_paths):
-                if i < len(image_paths):
-                    media_items.append(('image', image_paths[i]))
-                    i += 1
-                if j < len(video_paths):
-                    media_items.append(('video', video_paths[j]))
-                    j += 1
-            
-            # Process each media item
-            for idx, (media_type, path) in enumerate(media_items):
-                duration = durations[idx] if idx < len(durations) else 3.0
+            # Process all images and videos
+            clips = []
+            for i, (image_path, duration) in enumerate(zip(media_files['images'], durations)):
+                # Process image
+                clip = self.process_image(image_path, duration)
                 
-                if media_type == 'image':
-                    clip = self.process_image(path, duration)
-                else:  # video
-                    clip = self.process_video(path, duration)
-                
-                # Select and apply transition based on context
-                transition_style = self.select_transition(
-                    idx, 
-                    len(media_items),
-                    video_style,
-                    content_type=media_type
-                )
-                
-                # Apply selected transition
-                if idx > 0:  # Not the first clip
-                    transition_effect = self.TRANSITIONS[transition_style]
-                    clip = transition_effect(clip, trans_duration)
-                
-                # Handle first and last clips
-                if idx == 0:  # First clip
-                    clip = clip.fadein(trans_duration)
-                if idx == len(media_items) - 1:  # Last clip
-                    clip = clip.fadeout(trans_duration)
-                
-                # Set start time
-                clip = clip.set_start(total_duration)
-                total_duration += duration
+                # Apply transition if not the first clip
+                if i > 0:
+                    # Use user's chosen transition style if provided, otherwise use style-based selection
+                    if transition_style:
+                        transition = self.TRANSITIONS[transition_style]
+                    else:
+                        transition_style = self.select_transition(i, len(media_files['images']), video_style)
+                        transition = self.TRANSITIONS[transition_style]
+                    
+                    # Apply transition
+                    clip = transition(clip, transition_duration)
                 
                 clips.append(clip)
-                
-                logger.info(f"Added clip {idx + 1}/{len(media_items)} with {transition_style} transition")
+            
+            # Process videos if any
+            for video_path in media_files.get('videos', []):
+                video_clip = self.process_video(video_path)
+                clips.append(video_clip)
             
             return clips
             

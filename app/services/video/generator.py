@@ -449,13 +449,15 @@ class VideoGenerator:
             # Get transition preferences
             transition_prefs = request.transitionPreferences
             transition_duration = transition_prefs.duration if transition_prefs else 0.5
+            transition_style = transition_prefs.defaultStyle if transition_prefs else None
             
-            # Create video segments with AI-driven transitions if enabled
+            # Create video segments with transitions
             video_segments = media_processor.create_video_segments(
                 media_assets,
                 durations,
                 video_style=request.style,
-                transition_duration=transition_duration
+                transition_duration=transition_duration,
+                transition_style=transition_style
             )
             
             if not video_segments:
