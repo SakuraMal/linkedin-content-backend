@@ -447,18 +447,20 @@ class VideoGenerator:
             # Calculate total transition time
             total_transition_time = (len(matched_segments) - 1) * transition_duration
             
-            # Adjust segment durations to match audio duration
-            total_segment_duration = sum(segment['duration'] for segment in matched_segments)
-            if total_segment_duration > 0:
-                scale_factor = (actual_audio_duration - total_transition_time) / total_segment_duration
-                for segment in matched_segments:
-                    segment['duration'] = round(segment['duration'] * scale_factor, 2)
+            # Calculate equal duration for each image
+            # Subtract total transition time from audio duration to get available time for images
+            available_image_time = actual_audio_duration - total_transition_time
+            equal_image_duration = available_image_time / len(matched_segments)
             
-            # Create video segments with content-aware timing
+            # Update segment durations to be equal
+            for segment in matched_segments:
+                segment['duration'] = equal_image_duration
+            
+            # Create video segments with equal timing
             video_segments = []
             for i, segment in enumerate(matched_segments):
-                # Process image
-                clip = media_processor.process_image(segment['image_path'], segment['duration'])
+                # Process image with equal duration
+                clip = media_processor.process_image(segment['image_path'], equal_image_duration)
                 
                 # Apply transition if not the first clip
                 if i > 0:
@@ -478,7 +480,7 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
                 
-            logger.info(f"Created {len(video_segments)} video segments with content-aware timing")
+            logger.info(f"Created {len(video_segments)} video segments with equal timing")
             self.update_job_status(redis_client, job_id, "media_processed", progress=60)
             
             # Combine audio and video
