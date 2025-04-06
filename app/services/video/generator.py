@@ -19,6 +19,7 @@ import psutil
 import requests
 from .caption_renderer import CaptionRenderer
 from ...config import is_feature_enabled
+from moviepy.editor import AudioFileClip
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
@@ -415,12 +416,18 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
             
+            # Get actual audio duration
+            audio_clip = AudioFileClip(audio_file)
+            actual_audio_duration = audio_clip.duration
+            audio_clip.close()
+            logger.info(f"Actual audio duration: {actual_audio_duration:.2f}s (requested: {request.duration}s)")
+            
             # Monitor memory usage after audio generation
             logger.info(f"Memory after audio generation: {process.memory_info().rss / 1024 / 1024:.2f} MB")
             
             # Process media
             self.update_job_status(redis_client, job_id, "processing_media", progress=50)
-            logger.info(f"Processing media with duration: {request.duration}")
+            logger.info(f"Processing media with duration: {actual_audio_duration}s")
             
             # Calculate segment durations with minimum duration per image
             num_images = len(media_assets.get('images', []))
@@ -439,7 +446,7 @@ class VideoGenerator:
             total_transition_time = (num_images - 1) * transition_duration
             
             # Calculate available time for images (total duration minus transitions)
-            available_image_time = request.duration - total_transition_time
+            available_image_time = actual_audio_duration - total_transition_time
             
             # Calculate duration per image
             segment_duration = available_image_time / num_images
@@ -450,7 +457,7 @@ class VideoGenerator:
                 # If we can't fit all images with minimum duration, adjust the number of images
                 max_images = int(available_image_time / MIN_DURATION_PER_IMAGE)
                 if max_images < 1:
-                    error_msg = f"Cannot create video: requested duration {request.duration}s is too short for transitions"
+                    error_msg = f"Cannot create video: audio duration {actual_audio_duration}s is too short for transitions"
                     logger.error(error_msg)
                     self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                     raise Exception(error_msg)
@@ -466,7 +473,7 @@ class VideoGenerator:
             # Log the calculated durations
             total_video_duration = sum(durations) + total_transition_time
             logger.info(f"Using {num_images} images with {segment_duration:.2f}s per image")
-            logger.info(f"Total video duration: {total_video_duration:.2f}s (requested: {request.duration}s)")
+            logger.info(f"Total video duration: {total_video_duration:.2f}s (audio: {actual_audio_duration}s)")
             logger.info(f"Total transition time: {total_transition_time:.2f}s")
             
             # Create video segments with transitions
