@@ -382,6 +382,16 @@ class VideoGenerator:
                 raise Exception(error_msg)
             logger.info("Text processed successfully")
             
+            # Analyze content segments
+            logger.info("Analyzing content segments")
+            segments = text_processor.analyze_content_segments(processed_text)
+            logger.info(f"Identified {len(segments)} content segments")
+            
+            # Match images to segments
+            logger.info("Matching images to segments")
+            matched_segments = text_processor.match_images_to_segments(segments, media_assets['images'])
+            logger.info("Successfully matched images to segments")
+            
             # Monitor memory usage before audio generation
             logger.info(f"Memory before audio generation: {process.memory_info().rss / 1024 / 1024:.2f} MB")
             
@@ -429,61 +439,38 @@ class VideoGenerator:
             self.update_job_status(redis_client, job_id, "processing_media", progress=50)
             logger.info(f"Processing media with duration: {actual_audio_duration}s")
             
-            # Calculate segment durations with minimum duration per image
-            num_images = len(media_assets.get('images', []))
-            if num_images == 0:
-                error_msg = "No images available for processing"
-                logger.error(error_msg)
-                self.update_job_status(redis_client, job_id, "failed", error=error_msg)
-                raise Exception(error_msg)
-            
             # Get transition preferences
             transition_prefs = request.transitionPreferences
             transition_duration = transition_prefs.duration if transition_prefs else 0.5
             transition_style = transition_prefs.defaultStyle if transition_prefs else None
             
-            # Calculate total transition time (transitions between images)
-            total_transition_time = (num_images - 1) * transition_duration
+            # Calculate total transition time
+            total_transition_time = (len(matched_segments) - 1) * transition_duration
             
-            # Calculate available time for images (total duration minus transitions)
-            available_image_time = actual_audio_duration - total_transition_time
+            # Adjust segment durations to match audio duration
+            total_segment_duration = sum(segment['duration'] for segment in matched_segments)
+            if total_segment_duration > 0:
+                scale_factor = (actual_audio_duration - total_transition_time) / total_segment_duration
+                for segment in matched_segments:
+                    segment['duration'] = round(segment['duration'] * scale_factor, 2)
             
-            # Calculate duration per image
-            segment_duration = available_image_time / num_images
-            
-            # Set a minimum duration per image (1 second)
-            MIN_DURATION_PER_IMAGE = 1.0
-            if segment_duration < MIN_DURATION_PER_IMAGE:
-                # If we can't fit all images with minimum duration, adjust the number of images
-                max_images = int(available_image_time / MIN_DURATION_PER_IMAGE)
-                if max_images < 1:
-                    error_msg = f"Cannot create video: audio duration {actual_audio_duration}s is too short for transitions"
-                    logger.error(error_msg)
-                    self.update_job_status(redis_client, job_id, "failed", error=error_msg)
-                    raise Exception(error_msg)
+            # Create video segments with content-aware timing
+            video_segments = []
+            for i, segment in enumerate(matched_segments):
+                # Process image
+                clip = media_processor.process_image(segment['image_path'], segment['duration'])
                 
-                # Use only the maximum number of images that can fit
-                num_images = max_images
-                segment_duration = MIN_DURATION_PER_IMAGE
-                logger.warning(f"Adjusted to use {num_images} images with {segment_duration:.2f}s per image to meet minimum duration requirements")
-            
-            # Create durations array
-            durations = [segment_duration] * num_images
-            
-            # Log the calculated durations
-            total_video_duration = sum(durations) + total_transition_time
-            logger.info(f"Using {num_images} images with {segment_duration:.2f}s per image")
-            logger.info(f"Total video duration: {total_video_duration:.2f}s (audio: {actual_audio_duration}s)")
-            logger.info(f"Total transition time: {total_transition_time:.2f}s")
-            
-            # Create video segments with transitions
-            video_segments = media_processor.create_video_segments(
-                media_assets,
-                durations,
-                video_style=request.style,
-                transition_duration=transition_duration,
-                transition_style=transition_style
-            )
+                # Apply transition if not the first clip
+                if i > 0:
+                    if transition_style:
+                        transition = media_processor.TRANSITIONS[transition_style]
+                    else:
+                        transition_style = media_processor.select_transition(i, len(matched_segments), request.style)
+                        transition = media_processor.TRANSITIONS[transition_style]
+                    
+                    clip = transition(clip, transition_duration)
+                
+                video_segments.append(clip)
             
             if not video_segments:
                 error_msg = "Failed to create video segments"
@@ -491,7 +478,7 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
                 
-            logger.info(f"Created {len(video_segments)} video segments")
+            logger.info(f"Created {len(video_segments)} video segments with content-aware timing")
             self.update_job_status(redis_client, job_id, "media_processed", progress=60)
             
             # Combine audio and video
