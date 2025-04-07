@@ -8,6 +8,7 @@ from typing import Optional
 from moviepy.editor import AudioFileClip
 from moviepy.audio.fx.all import audio_fadein, audio_fadeout
 from moviepy.audio.fx.volumex import volumex
+import shutil
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug level logging
@@ -16,6 +17,7 @@ class AudioGenerator:
     def __init__(self):
         """Initialize the AudioGenerator service."""
         self.voice = "en-US-GuyNeural"  # Default voice
+        self.rate = "+0%"  # Default rate (2.6 words per second)
         
         # Create temporary directory with multiple fallback options
         try:
@@ -60,7 +62,7 @@ class AudioGenerator:
 
         logger.info(f"Initialized AudioGenerator with temp directory: {self.temp_dir}")
 
-    def generate_audio(self, text: str, voice: Optional[str] = None, fade_in: float = 2.0, fade_out: float = 2.0, target_duration: Optional[float] = None) -> str:
+    def generate_audio(self, text: str, voice: Optional[str] = None, fade_in: float = 2.0, fade_out: float = 2.0) -> str:
         """
         Synchronous wrapper for async generate_audio method.
         
@@ -69,8 +71,6 @@ class AudioGenerator:
             voice: Optional voice to use (defaults to en-US-GuyNeural)
             fade_in: Duration of fade in effect in seconds
             fade_out: Duration of fade out effect in seconds
-            target_duration: Optional target duration in seconds. If provided, the audio will be
-                           adjusted to match this duration using time stretching.
             
         Returns:
             str: Path to the generated audio file
@@ -95,10 +95,6 @@ class AudioGenerator:
             # Apply fade effects if specified
             if fade_in > 0 or fade_out > 0:
                 result = self._apply_fade_effects(result, fade_in, fade_out)
-            
-            # Adjust duration if target_duration is specified
-            if target_duration is not None:
-                result = self._adjust_duration(result, target_duration)
             
             return result
         except Exception as e:
@@ -142,45 +138,6 @@ class AudioGenerator:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return audio_path  # Return original file if processing fails
 
-    def _adjust_duration(self, audio_path: str, target_duration: float) -> str:
-        """
-        Adjust the duration of an audio file to match the target duration.
-        
-        Args:
-            audio_path: Path to the input audio file
-            target_duration: Target duration in seconds
-            
-        Returns:
-            str: Path to the processed audio file
-        """
-        try:
-            # Load audio clip
-            audio = AudioFileClip(audio_path)
-            
-            # Calculate speed factor
-            current_duration = audio.duration
-            speed_factor = current_duration / target_duration
-            
-            # Apply speed adjustment using volume modulation
-            if speed_factor != 1.0:
-                # We'll use volume modulation as a workaround for speed adjustment
-                # This is not ideal but works as a temporary solution
-                audio = audio.fx(volumex, speed_factor)
-            
-            # Save processed audio
-            output_path = os.path.join(self.temp_dir, f"duration_adjusted_{os.path.basename(audio_path)}")
-            audio.write_audiofile(output_path)
-            
-            # Clean up
-            audio.close()
-            os.remove(audio_path)  # Remove original file
-            
-            return output_path
-        except Exception as e:
-            logger.error(f"Error adjusting audio duration: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            return audio_path  # Return original file if processing fails
-
     async def _generate_audio_async(self, text: str, voice: Optional[str] = None) -> str:
         """
         Generate audio from text using Edge TTS.
@@ -198,37 +155,19 @@ class AudioGenerator:
             logger.debug(f"Using voice: {selected_voice}")
             
             # Ensure the temp directory exists
-            if not os.path.exists(self.temp_dir):
-                logger.warning(f"Temp directory doesn't exist, recreating: {self.temp_dir}")
-                os.makedirs(self.temp_dir, exist_ok=True)
-                
-            # Create temporary file path
-            temp_path = os.path.join(self.temp_dir, f"audio_{hash(text)}.mp3")
-            logger.debug(f"Will save audio to: {temp_path}")
+            os.makedirs(self.temp_dir, exist_ok=True)
             
-            # Double-check parent directory exists before saving
-            parent_dir = os.path.dirname(temp_path)
-            if not os.path.exists(parent_dir):
-                logger.warning(f"Parent directory doesn't exist, creating: {parent_dir}")
-                os.makedirs(parent_dir, exist_ok=True)
+            # Generate unique filename
+            output_path = os.path.join(self.temp_dir, f"tts_{os.urandom(4).hex()}.mp3")
             
-            # Generate audio
-            communicate = Communicate(text, selected_voice)
-            logger.debug("Created Communicate instance")
+            # Create communicate object with voice and rate
+            communicate = Communicate(text, selected_voice, rate=self.rate)
             
-            await communicate.save(temp_path)
-            logger.info(f"Successfully generated audio at: {temp_path}")
+            # Generate audio file
+            await communicate.save(output_path)
             
-            # Verify file exists and has size
-            if os.path.exists(temp_path):
-                size = os.path.getsize(temp_path)
-                logger.debug(f"Generated audio file size: {size} bytes")
-                if size == 0:
-                    raise Exception("Generated audio file is empty")
-            else:
-                raise Exception("Audio file was not created")
-            
-            return temp_path
+            logger.info(f"Successfully generated audio file: {output_path}")
+            return output_path
             
         except Exception as e:
             logger.error(f"Error generating audio: {str(e)}")
@@ -236,14 +175,13 @@ class AudioGenerator:
             return None
 
     def cleanup(self):
-        """Clean up temporary files."""
+        """Clean up temporary files and directory."""
         try:
-            import shutil
-            shutil.rmtree(self.temp_dir)
-            logger.info("Cleaned up temporary audio files")
+            if os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
+                logger.info(f"Cleaned up temp directory: {self.temp_dir}")
         except Exception as e:
-            logger.error(f"Error cleaning up audio files: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"Error cleaning up temp directory: {str(e)}")
 
 # Create singleton instance
 audio_generator = AudioGenerator() 
