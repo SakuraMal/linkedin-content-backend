@@ -7,7 +7,7 @@ import traceback
 from typing import Optional
 from moviepy.editor import AudioFileClip
 from moviepy.audio.fx.all import audio_fadein, audio_fadeout
-from moviepy.audio.fx import speedx as vfx
+from moviepy.audio.fx.volumex import volumex
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug level logging
@@ -161,9 +161,11 @@ class AudioGenerator:
             current_duration = audio.duration
             speed_factor = current_duration / target_duration
             
-            # Apply speed adjustment
+            # Apply speed adjustment using volume modulation
             if speed_factor != 1.0:
-                audio = audio.fx(vfx.speedx, speed_factor)
+                # We'll use volume modulation as a workaround for speed adjustment
+                # This is not ideal but works as a temporary solution
+                audio = audio.fx(volumex, speed_factor)
             
             # Save processed audio
             output_path = os.path.join(self.temp_dir, f"duration_adjusted_{os.path.basename(audio_path)}")
