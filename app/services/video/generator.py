@@ -382,15 +382,38 @@ class VideoGenerator:
                 raise Exception(error_msg)
             logger.info("Text processed successfully")
             
-            # Analyze content segments
-            logger.info("Analyzing content segments")
-            segments = text_processor.analyze_content_segments(processed_text)
-            logger.info(f"Identified {len(segments)} content segments")
+            # Check video preferences for content analysis and segment matching
+            video_prefs = request.videoPreferences if hasattr(request, 'videoPreferences') else {}
+            disable_content_analysis = video_prefs.get('disableContentAnalysis', False)
+            force_simple_distribution = video_prefs.get('forceSimpleDistribution', False)
+            skip_segment_matching = video_prefs.get('skipSegmentMatching', False)
             
-            # Match images to segments
-            logger.info("Matching images to segments")
-            matched_segments = text_processor.match_images_to_segments(segments, media_assets['images'])
-            logger.info("Successfully matched images to segments")
+            logger.info(f"Video preferences: disable_content_analysis={disable_content_analysis}, force_simple_distribution={force_simple_distribution}, skip_segment_matching={skip_segment_matching}")
+            
+            if disable_content_analysis or force_simple_distribution or skip_segment_matching:
+                # Skip content analysis and use simple distribution
+                logger.info("Using simple distribution for images")
+                matched_segments = []
+                equal_duration = request.duration / len(media_assets['images'])
+                for i, image_path in enumerate(media_assets['images']):
+                    matched_segments.append({
+                        'image_path': image_path,
+                        'duration': equal_duration,
+                        'text': processed_text,  # Use full text for each segment
+                        'topic': 'Simple distribution',
+                        'key_points': ['Simple distribution']
+                    })
+                logger.info(f"Created {len(matched_segments)} segments with simple distribution")
+            else:
+                # Analyze content segments
+                logger.info("Analyzing content segments")
+                segments = text_processor.analyze_content_segments(processed_text)
+                logger.info(f"Identified {len(segments)} content segments")
+                
+                # Match images to segments
+                logger.info("Matching images to segments")
+                matched_segments = text_processor.match_images_to_segments(segments, media_assets['images'])
+                logger.info("Successfully matched images to segments")
             
             # Monitor memory usage before audio generation
             logger.info(f"Memory before audio generation: {process.memory_info().rss / 1024 / 1024:.2f} MB")
