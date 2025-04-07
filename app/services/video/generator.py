@@ -383,7 +383,7 @@ class VideoGenerator:
             logger.info("Text processed successfully")
             
             # Check video preferences for content analysis and segment matching
-            video_prefs = request.videoPreferences if hasattr(request, 'videoPreferences') else {}
+            video_prefs = request.videoPreferences if hasattr(request, 'videoPreferences') and request.videoPreferences is not None else {}
             disable_content_analysis = video_prefs.get('disableContentAnalysis', False)
             force_simple_distribution = video_prefs.get('forceSimpleDistribution', False)
             skip_segment_matching = video_prefs.get('skipSegmentMatching', False)
