@@ -402,15 +402,23 @@ class VideoGenerator:
             
             # Get audio preferences or use defaults
             audio_prefs = request.audioPreferences or {}
-            fade_in = audio_prefs.fadeInDuration if audio_prefs else 2.0
-            fade_out = audio_prefs.fadeOutDuration if audio_prefs else 2.0
+            fade_in = audio_prefs.get('fadeInDuration', 2.0)
+            fade_out = audio_prefs.get('fadeOutDuration', 2.0)
+            strict_duration = audio_prefs.get('strictDuration', True)
+            enforce_duration = audio_prefs.get('enforceDuration', True)
+            match_video_duration = audio_prefs.get('matchVideoDuration', True)
+            trim_audio = audio_prefs.get('trimAudio', True)
+            sync_with_video = audio_prefs.get('syncWithVideo', True)
+            normalize_audio = audio_prefs.get('normalizeAudio', True)
+            max_duration = audio_prefs.get('maxDuration', request.duration - 2)
             
-            logger.info(f"Using audio preferences - fade in: {fade_in}s, fade out: {fade_out}s")
+            logger.info(f"Using audio preferences - fade in: {fade_in}s, fade out: {fade_out}s, strict_duration: {strict_duration}")
             audio_file = audio_generator.generate_audio(
                 processed_text,
                 voice=request.voice,
                 fade_in=fade_in,
-                fade_out=fade_out
+                fade_out=fade_out,
+                target_duration=request.duration if strict_duration else None
             )
             
             # Track audio file for cleanup
@@ -426,11 +434,29 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
             
-            # Get actual audio duration
+            # Get actual audio duration and enforce timing
             audio_clip = AudioFileClip(audio_file)
             actual_audio_duration = audio_clip.duration
             audio_clip.close()
-            logger.info(f"Actual audio duration: {actual_audio_duration:.2f}s (requested: {request.duration}s)")
+            
+            # If we need to enforce duration, trim or extend the audio
+            if enforce_duration and abs(actual_audio_duration - request.duration) > 0.5:
+                logger.info(f"Audio duration ({actual_audio_duration}s) differs from requested duration ({request.duration}s), adjusting...")
+                if trim_audio:
+                    # Trim audio to match video duration
+                    if actual_audio_duration > request.duration:
+                        logger.info(f"Trimming audio from {actual_audio_duration}s to {request.duration}s")
+                        audio_clip = AudioFileClip(audio_file)
+                        audio_clip = audio_clip.subclip(0, request.duration)
+                        audio_clip.write_audiofile(audio_file)
+                        audio_clip.close()
+                        actual_audio_duration = request.duration
+                    else:
+                        logger.warning(f"Audio is shorter than requested duration ({actual_audio_duration}s < {request.duration}s)")
+                else:
+                    logger.warning(f"Audio duration mismatch but trim_audio is disabled")
+            
+            logger.info(f"Final audio duration: {actual_audio_duration:.2f}s (requested: {request.duration}s)")
             
             # Monitor memory usage after audio generation
             logger.info(f"Memory after audio generation: {process.memory_info().rss / 1024 / 1024:.2f} MB")
@@ -447,14 +473,31 @@ class VideoGenerator:
             # Calculate total transition time
             total_transition_time = (len(matched_segments) - 1) * transition_duration
             
-            # Calculate equal duration for each image
-            # Subtract total transition time from audio duration to get available time for images
+            # Calculate equal duration for each image with minimum duration enforcement
             available_image_time = actual_audio_duration - total_transition_time
+            min_segment_duration = 2.5  # Minimum 2.5 seconds per segment
+            
+            # Check if we have enough time for all segments with minimum duration
+            required_time = len(matched_segments) * min_segment_duration + total_transition_time
+            if available_image_time < required_time:
+                # Reduce number of segments to fit minimum duration
+                max_segments = math.floor((actual_audio_duration - total_transition_time) / min_segment_duration)
+                if max_segments < 1:
+                    max_segments = 1
+                logger.warning(f"Not enough time for all segments with minimum duration. Reducing from {len(matched_segments)} to {max_segments} segments")
+                matched_segments = matched_segments[:max_segments]
+                # Recalculate total transition time
+                total_transition_time = (len(matched_segments) - 1) * transition_duration
+                available_image_time = actual_audio_duration - total_transition_time
+            
+            # Calculate equal duration for remaining segments
             equal_image_duration = available_image_time / len(matched_segments)
             
             # Update segment durations to be equal
             for segment in matched_segments:
                 segment['duration'] = equal_image_duration
+            
+            logger.info(f"Calculated timing - Total duration: {actual_audio_duration}s, Transition time: {total_transition_time}s, Segments: {len(matched_segments)}, Segment duration: {equal_image_duration:.2f}s")
             
             # Create video segments with equal timing
             video_segments = []

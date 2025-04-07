@@ -7,6 +7,7 @@ import traceback
 from typing import Optional
 from moviepy.editor import AudioFileClip
 from moviepy.audio.fx.all import audio_fadein, audio_fadeout
+from moviepy.audio.fx import speedx as vfx
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug level logging
@@ -59,7 +60,7 @@ class AudioGenerator:
 
         logger.info(f"Initialized AudioGenerator with temp directory: {self.temp_dir}")
 
-    def generate_audio(self, text: str, voice: Optional[str] = None, fade_in: float = 2.0, fade_out: float = 2.0) -> str:
+    def generate_audio(self, text: str, voice: Optional[str] = None, fade_in: float = 2.0, fade_out: float = 2.0, target_duration: Optional[float] = None) -> str:
         """
         Synchronous wrapper for async generate_audio method.
         
@@ -68,6 +69,8 @@ class AudioGenerator:
             voice: Optional voice to use (defaults to en-US-GuyNeural)
             fade_in: Duration of fade in effect in seconds
             fade_out: Duration of fade out effect in seconds
+            target_duration: Optional target duration in seconds. If provided, the audio will be
+                           adjusted to match this duration using time stretching.
             
         Returns:
             str: Path to the generated audio file
@@ -92,6 +95,10 @@ class AudioGenerator:
             # Apply fade effects if specified
             if fade_in > 0 or fade_out > 0:
                 result = self._apply_fade_effects(result, fade_in, fade_out)
+            
+            # Adjust duration if target_duration is specified
+            if target_duration is not None:
+                result = self._adjust_duration(result, target_duration)
             
             return result
         except Exception as e:
@@ -132,6 +139,43 @@ class AudioGenerator:
             return output_path
         except Exception as e:
             logger.error(f"Error applying fade effects: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return audio_path  # Return original file if processing fails
+
+    def _adjust_duration(self, audio_path: str, target_duration: float) -> str:
+        """
+        Adjust the duration of an audio file to match the target duration.
+        
+        Args:
+            audio_path: Path to the input audio file
+            target_duration: Target duration in seconds
+            
+        Returns:
+            str: Path to the processed audio file
+        """
+        try:
+            # Load audio clip
+            audio = AudioFileClip(audio_path)
+            
+            # Calculate speed factor
+            current_duration = audio.duration
+            speed_factor = current_duration / target_duration
+            
+            # Apply speed adjustment
+            if speed_factor != 1.0:
+                audio = audio.fx(vfx.speedx, speed_factor)
+            
+            # Save processed audio
+            output_path = os.path.join(self.temp_dir, f"duration_adjusted_{os.path.basename(audio_path)}")
+            audio.write_audiofile(output_path)
+            
+            # Clean up
+            audio.close()
+            os.remove(audio_path)  # Remove original file
+            
+            return output_path
+        except Exception as e:
+            logger.error(f"Error adjusting audio duration: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
             return audio_path  # Return original file if processing fails
 
