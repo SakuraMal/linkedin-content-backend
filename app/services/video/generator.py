@@ -441,8 +441,7 @@ class VideoGenerator:
                 processed_text,
                 voice=request.voice,
                 fade_in=fade_in,
-                fade_out=fade_out,
-                target_duration=request.duration if strict_duration else None
+                fade_out=fade_out
             )
             
             # Track audio file for cleanup
