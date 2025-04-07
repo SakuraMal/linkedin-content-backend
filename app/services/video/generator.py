@@ -389,6 +389,7 @@ class VideoGenerator:
             skip_segment_matching = video_prefs.get('skipSegmentMatching', False)
             
             logger.info(f"Video preferences: disable_content_analysis={disable_content_analysis}, force_simple_distribution={force_simple_distribution}, skip_segment_matching={skip_segment_matching}")
+            logger.info(f"Full video preferences: {video_prefs}")
             
             if disable_content_analysis or force_simple_distribution or skip_segment_matching:
                 # Skip content analysis and use simple distribution
@@ -600,12 +601,13 @@ class VideoGenerator:
                     caption_prefs = None
                     caption_timing = None
                     
-                    # Check if videoPreferences.captions exists in the request
-                    if hasattr(request, 'videoPreferences') and request.videoPreferences:
-                        if hasattr(request.videoPreferences, 'captions') and request.videoPreferences.captions:
-                            captions_enabled = request.videoPreferences.captions.enabled
-                            caption_prefs = request.videoPreferences.captions.dict() if hasattr(request.videoPreferences.captions, 'dict') else request.videoPreferences.captions
-                            caption_timing = getattr(request.videoPreferences.captions, 'timing', None)
+                    # Safely check for videoPreferences and captions
+                    if hasattr(request, 'videoPreferences') and request.videoPreferences is not None:
+                        video_prefs = request.videoPreferences
+                        if hasattr(video_prefs, 'captions') and video_prefs.captions is not None:
+                            captions_enabled = getattr(video_prefs.captions, 'enabled', False)
+                            caption_prefs = video_prefs.captions.dict() if hasattr(video_prefs.captions, 'dict') else video_prefs.captions
+                            caption_timing = getattr(video_prefs.captions, 'timing', None)
                             logger.info(f"Found captions in videoPreferences: enabled={captions_enabled}, has_timing={caption_timing is not None}")
                             if caption_timing:
                                 logger.info(f"Caption timing data: {len(caption_timing)} segments")
