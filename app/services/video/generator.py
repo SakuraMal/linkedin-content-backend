@@ -407,7 +407,22 @@ class VideoGenerator:
             logger.info(f"Video preferences: disable_content_analysis={disable_content_analysis}, force_simple_distribution={force_simple_distribution}, skip_segment_matching={skip_segment_matching}")
             logger.info(f"Full video preferences: {video_prefs}")
             
-            if disable_content_analysis or force_simple_distribution or skip_segment_matching:
+            # For stock media, always use simple distribution with all images, regardless of content analysis
+            if is_stock_media_direct:
+                logger.info("Using simple distribution for all stock media images")
+                matched_segments = []
+                num_images = len(media_assets['images'])
+                equal_duration = request.duration / num_images
+                for i, image_path in enumerate(media_assets['images']):
+                    matched_segments.append({
+                        'image_path': image_path,
+                        'duration': equal_duration,
+                        'text': processed_text,  # Use full text for each segment
+                        'topic': 'Stock media segment',
+                        'key_points': ['Stock media']
+                    })
+                logger.info(f"Created {len(matched_segments)} segments with simple distribution for stock media")
+            elif disable_content_analysis or force_simple_distribution or skip_segment_matching:
                 # Skip content analysis and use simple distribution
                 logger.info("Using simple distribution for images")
                 matched_segments = []
@@ -481,69 +496,91 @@ class VideoGenerator:
             # Check if audio is too long and regenerate a shorter version before any trimming
             if actual_audio_duration > request.duration + 0.5:  # Adding a small buffer
                 logger.info(f"Audio duration ({actual_audio_duration:.2f}s) exceeds requested duration ({request.duration:.2f}s)")
-                logger.info("Generating a shorter version of the text to match the requested duration")
                 
-                # Use OpenAI to generate a shorter version of the text
-                try:
-                    response = self.openai_client.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": f"""You are a professional content editor. Create a significantly shorter version of the following text that will take approximately {request.duration - 1} seconds to speak naturally (to allow for fade effects).
-                                
-                                Rules:
-                                1. Maintain the key message and professional tone
-                                2. Make it much more concise while preserving core information
-                                3. Ensure the content flows naturally and ends with a complete thought
-                                4. Make it sound natural when spoken
-                                5. Be very brief but maintain clarity
-                                
-                                The content should be ready to be spoken as-is."""
-                            },
-                            {
-                                "role": "user",
-                                "content": processed_text
-                            }
-                        ],
-                        temperature=0.7,
-                        max_tokens=500
-                    )
+                # Try up to 3 iterations of progressively shorter text
+                max_attempts = 3
+                current_attempt = 1
+                
+                while current_attempt <= max_attempts and actual_audio_duration > request.duration + 0.5:
+                    logger.info(f"Attempting to generate shorter audio (attempt {current_attempt}/{max_attempts})")
                     
-                    shorter_text = response.choices[0].message.content.strip()
-                    if shorter_text and len(shorter_text) < len(processed_text):
-                        logger.info(f"Generated shorter text: Original {len(processed_text)} chars -> New {len(shorter_text)} chars")
-                        
-                        # Generate new audio with shorter text
-                        logger.info("Generating new audio with shorter text")
-                        new_audio_file = audio_generator.generate_audio(
-                            shorter_text,
-                            voice=request.voice,
-                            fade_in=fade_in,
-                            fade_out=fade_out
+                    # Make target duration shorter with each attempt to account for speaking variations
+                    target_duration = request.duration - (0.5 * current_attempt)
+                    if target_duration < 5:  # Don't go too short
+                        target_duration = 5
+                    
+                    logger.info(f"Generating a very concise version of the text for target duration of {target_duration:.2f}s")
+                    
+                    # Use OpenAI to generate a shorter version of the text
+                    try:
+                        response = self.openai_client.chat.completions.create(
+                            model="gpt-3.5-turbo",
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": f"""You are a professional content editor. Create an extremely concise version of the following text that will take approximately {target_duration} seconds to speak naturally (allowing for fade effects).
+                                    
+                                    Rules:
+                                    1. Be EXTREMELY brief while maintaining the key message
+                                    2. Use only the most essential information - cut ruthlessly
+                                    3. Use shorter words and simpler sentences
+                                    4. Ensure the content still flows naturally and makes sense
+                                    5. Keep it extremely short but maintain clarity
+                                    
+                                    The length of your response is CRITICAL - it must be spoken in {target_duration} seconds or less.
+                                    """
+                                },
+                                {
+                                    "role": "user",
+                                    "content": processed_text
+                                }
+                            ],
+                            temperature=0.7,
+                            max_tokens=500
                         )
                         
-                        if new_audio_file:
-                            # Replace the old audio file
-                            if os.path.exists(audio_file):
-                                os.remove(audio_file)
-                            audio_file = new_audio_file
-                            temp_files.append(audio_file)
+                        shorter_text = response.choices[0].message.content.strip()
+                        if shorter_text and len(shorter_text) < len(processed_text):
+                            logger.info(f"Generated shorter text: Original {len(processed_text)} chars -> New {len(shorter_text)} chars (attempt {current_attempt})")
                             
-                            # Get the new duration
-                            audio_clip = AudioFileClip(audio_file)
-                            actual_audio_duration = audio_clip.duration
-                            audio_clip.close()
+                            # Generate new audio with shorter text
+                            logger.info("Generating new audio with shorter text")
+                            new_audio_file = audio_generator.generate_audio(
+                                shorter_text,
+                                voice=request.voice,
+                                fade_in=fade_in,
+                                fade_out=fade_out
+                            )
                             
-                            logger.info(f"New audio generated successfully with duration: {actual_audio_duration:.2f}s")
+                            if new_audio_file:
+                                # Replace the old audio file
+                                if os.path.exists(audio_file):
+                                    os.remove(audio_file)
+                                audio_file = new_audio_file
+                                temp_files.append(audio_file)
+                                
+                                # Get the new duration
+                                audio_clip = AudioFileClip(audio_file)
+                                actual_audio_duration = audio_clip.duration
+                                audio_clip.close()
+                                
+                                logger.info(f"New audio generated with duration: {actual_audio_duration:.2f}s (attempt {current_attempt})")
+                                processed_text = shorter_text  # Update processed text for potential next iteration
+                            else:
+                                logger.warning(f"Failed to generate new audio with shorter text (attempt {current_attempt})")
+                                break
                         else:
-                            logger.warning("Failed to generate new audio with shorter text, will use original audio")
-                    else:
-                        logger.warning("Failed to generate shorter text or result wasn't shorter, will use original audio")
-                        
-                except Exception as e:
-                    logger.error(f"Error generating shorter text: {str(e)}")
-                    logger.warning("Will use original audio due to regeneration failure")
+                            logger.warning(f"Failed to generate shorter text or result wasn't shorter (attempt {current_attempt})")
+                            break
+                            
+                    except Exception as e:
+                        logger.error(f"Error generating shorter text: {str(e)}")
+                        logger.warning("Will use existing audio due to regeneration failure")
+                        break
+                    
+                    current_attempt += 1
+                
+                logger.info(f"Final audio duration after {current_attempt-1} regeneration attempts: {actual_audio_duration:.2f}s")
             
             # If we still need to enforce duration, trim or extend the audio
             if enforce_duration and abs(actual_audio_duration - request.duration) > 0.5:
