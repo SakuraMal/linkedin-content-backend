@@ -7,6 +7,8 @@ import traceback
 from typing import Optional
 from moviepy.editor import AudioFileClip
 from moviepy.audio.fx.all import audio_fadein, audio_fadeout
+from moviepy.audio.fx.volumex import volumex
+import shutil
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug level logging
@@ -15,6 +17,7 @@ class AudioGenerator:
     def __init__(self):
         """Initialize the AudioGenerator service."""
         self.voice = "en-US-GuyNeural"  # Default voice
+        self.rate = "+0%"  # Default rate (2.6 words per second)
         
         # Create temporary directory with multiple fallback options
         try:
@@ -152,37 +155,19 @@ class AudioGenerator:
             logger.debug(f"Using voice: {selected_voice}")
             
             # Ensure the temp directory exists
-            if not os.path.exists(self.temp_dir):
-                logger.warning(f"Temp directory doesn't exist, recreating: {self.temp_dir}")
-                os.makedirs(self.temp_dir, exist_ok=True)
-                
-            # Create temporary file path
-            temp_path = os.path.join(self.temp_dir, f"audio_{hash(text)}.mp3")
-            logger.debug(f"Will save audio to: {temp_path}")
+            os.makedirs(self.temp_dir, exist_ok=True)
             
-            # Double-check parent directory exists before saving
-            parent_dir = os.path.dirname(temp_path)
-            if not os.path.exists(parent_dir):
-                logger.warning(f"Parent directory doesn't exist, creating: {parent_dir}")
-                os.makedirs(parent_dir, exist_ok=True)
+            # Generate unique filename
+            output_path = os.path.join(self.temp_dir, f"tts_{os.urandom(4).hex()}.mp3")
             
-            # Generate audio
-            communicate = Communicate(text, selected_voice)
-            logger.debug("Created Communicate instance")
+            # Create communicate object with voice and rate
+            communicate = Communicate(text, selected_voice, rate=self.rate)
             
-            await communicate.save(temp_path)
-            logger.info(f"Successfully generated audio at: {temp_path}")
+            # Generate audio file
+            await communicate.save(output_path)
             
-            # Verify file exists and has size
-            if os.path.exists(temp_path):
-                size = os.path.getsize(temp_path)
-                logger.debug(f"Generated audio file size: {size} bytes")
-                if size == 0:
-                    raise Exception("Generated audio file is empty")
-            else:
-                raise Exception("Audio file was not created")
-            
-            return temp_path
+            logger.info(f"Successfully generated audio file: {output_path}")
+            return output_path
             
         except Exception as e:
             logger.error(f"Error generating audio: {str(e)}")
@@ -190,14 +175,13 @@ class AudioGenerator:
             return None
 
     def cleanup(self):
-        """Clean up temporary files."""
+        """Clean up temporary files and directory."""
         try:
-            import shutil
-            shutil.rmtree(self.temp_dir)
-            logger.info("Cleaned up temporary audio files")
+            if os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
+                logger.info(f"Cleaned up temp directory: {self.temp_dir}")
         except Exception as e:
-            logger.error(f"Error cleaning up audio files: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"Error cleaning up temp directory: {str(e)}")
 
 # Create singleton instance
 audio_generator = AudioGenerator() 

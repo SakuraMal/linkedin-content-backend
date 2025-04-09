@@ -244,81 +244,49 @@ class MediaProcessor:
                             media_files: Dict[str, List[str]], 
                             durations: List[float],
                             video_style: VideoStyle = VideoStyle.PROFESSIONAL,
-                            transition_duration: Optional[float] = None) -> List[Union[ImageClip, VideoFileClip]]:
+                            transition_duration: Optional[float] = None,
+                            transition_style: Optional[TransitionStyle] = None) -> List[Union[ImageClip, VideoFileClip]]:
         """
-        Create video segments from processed images and videos with AI-driven transitions.
+        Create video segments from media files with transitions.
         
         Args:
-            media_files: Dictionary containing paths to media files
-            durations: List of durations for each media item
-            video_style: Style of the video for transition selection
-            transition_duration: Optional override for transition duration
+            media_files: Dictionary containing lists of image and video paths
+            durations: List of durations for each segment
+            video_style: Style of the video
+            transition_duration: Duration of transitions in seconds
+            transition_style: User's chosen transition style
             
         Returns:
-            List[Union[ImageClip, VideoFileClip]]: List of processed video segments
+            List of video clips with transitions
         """
         try:
-            clips = []
-            total_duration = 0
-            
             # Use provided transition duration or default
-            trans_duration = transition_duration or self.transition_duration
+            transition_duration = transition_duration or self.transition_duration
             
-            # Process images first
-            image_paths = media_files.get('images', [])
-            video_paths = media_files.get('videos', [])
-            
-            # Calculate durations for each type
-            total_media = len(image_paths) + len(video_paths)
-            if total_media == 0:
-                raise ValueError("No media files provided")
-            
-            # Interleave images and videos
-            media_items = []
-            i, j = 0, 0
-            while i < len(image_paths) or j < len(video_paths):
-                if i < len(image_paths):
-                    media_items.append(('image', image_paths[i]))
-                    i += 1
-                if j < len(video_paths):
-                    media_items.append(('video', video_paths[j]))
-                    j += 1
-            
-            # Process each media item
-            for idx, (media_type, path) in enumerate(media_items):
-                duration = durations[idx] if idx < len(durations) else 3.0
+            # Process all images and videos
+            clips = []
+            for i, (image_path, duration) in enumerate(zip(media_files['images'], durations)):
+                # Process image
+                clip = self.process_image(image_path, duration)
                 
-                if media_type == 'image':
-                    clip = self.process_image(path, duration)
-                else:  # video
-                    clip = self.process_video(path, duration)
-                
-                # Select and apply transition based on context
-                transition_style = self.select_transition(
-                    idx, 
-                    len(media_items),
-                    video_style,
-                    content_type=media_type
-                )
-                
-                # Apply selected transition
-                if idx > 0:  # Not the first clip
-                    transition_effect = self.TRANSITIONS[transition_style]
-                    clip = transition_effect(clip, trans_duration)
-                
-                # Handle first and last clips
-                if idx == 0:  # First clip
-                    clip = clip.fadein(trans_duration)
-                if idx == len(media_items) - 1:  # Last clip
-                    clip = clip.fadeout(trans_duration)
-                
-                # Set start time
-                clip = clip.set_start(total_duration)
-                total_duration += duration
+                # Apply transition if not the first clip
+                if i > 0:
+                    # Use user's chosen transition style if provided, otherwise use style-based selection
+                    if transition_style:
+                        transition = self.TRANSITIONS[transition_style]
+                    else:
+                        transition_style = self.select_transition(i, len(media_files['images']), video_style)
+                        transition = self.TRANSITIONS[transition_style]
+                    
+                    # Apply transition
+                    clip = transition(clip, transition_duration)
                 
                 clips.append(clip)
-                
-                logger.info(f"Added clip {idx + 1}/{len(media_items)} with {transition_style} transition")
+            
+            # Process videos if any
+            for video_path in media_files.get('videos', []):
+                video_clip = self.process_video(video_path)
+                clips.append(video_clip)
             
             return clips
             
@@ -328,83 +296,71 @@ class MediaProcessor:
 
     def combine_with_audio(self, video_clips: List[Union[ImageClip, VideoFileClip]], audio_path: str) -> Optional[str]:
         """
-        Combine video clips with audio into a final video.
+        Combine video clips with audio, ensuring proper synchronization and equal display times.
         
         Args:
-            video_clips: List of processed video clips
+            video_clips: List of video clips to combine
             audio_path: Path to the audio file
             
         Returns:
-            str: Path to the final video, or None if an error occurred
+            Optional[str]: Path to the final video file if successful, None otherwise
         """
         try:
-            logger.info(f"Combining {len(video_clips)} video clips with audio")
-            
-            # Memory usage before processing
-            process = psutil.Process()
-            logger.info(f"Memory usage before combining: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-            
-            # Create composite video with sequential clips
-            logger.info(f"Creating composite video from {len(video_clips)} clips")
-            final_video = CompositeVideoClip(video_clips, size=self.target_resolution)
-            
-            # Memory usage after creating composite
-            logger.info(f"Memory usage after creating composite: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-            
             # Process audio
-            logger.info(f"Processing audio file: {audio_path}")
-            audio = AudioFileClip(audio_path)
+            audio_clip = self.process_audio(audio_path)
+            total_audio_duration = audio_clip.duration
             
-            # Ensure audio duration matches video duration
-            if audio.duration > final_video.duration:
-                logger.info(f"Trimming audio from {audio.duration}s to {final_video.duration}s")
-                audio = audio.set_duration(final_video.duration)
+            # Calculate equal duration for each clip
+            num_clips = len(video_clips)
+            clip_duration = total_audio_duration / num_clips
+            
+            # Adjust each clip's duration
+            adjusted_clips = []
+            for i, clip in enumerate(video_clips):
+                # Set equal duration for each clip
+                adjusted_clip = clip.set_duration(clip_duration)
                 
-            # Add audio to video
-            final_video = final_video.set_audio(audio)
+                # Apply transition if not the last clip
+                if i < num_clips - 1:
+                    transition = self.select_transition(i, num_clips, VideoStyle.PROFESSIONAL)
+                    transition_func = self.TRANSITIONS[transition]
+                    adjusted_clip = transition_func(adjusted_clip, self.transition_duration)
+                
+                adjusted_clips.append(adjusted_clip)
             
-            # Prepare output path
-            output_path = os.path.join(self.temp_dir, 'final_video.mp4')
-            logger.info(f"Writing video to: {output_path}")
+            # Concatenate all clips
+            final_video = concatenate_videoclips(adjusted_clips)
             
-            # Memory usage before rendering
-            logger.info(f"Memory usage before rendering: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+            # Set audio
+            final_video = final_video.set_audio(audio_clip)
             
-            # Write video file with reduced quality settings for better performance
+            # Generate output path
+            output_path = os.path.join(self.temp_dir, "final_video.mp4")
+            
+            # Write video with high quality settings
             final_video.write_videofile(
                 output_path,
-                fps=24,  # Reduced from 30 to save resources
                 codec='libx264',
                 audio_codec='aac',
-                audio_bitrate='128k',  # Reduced from 192k
-                bitrate='5000k',  # Reduced from 8000k
-                temp_audiofile=os.path.join(self.temp_dir, 'temp_audio.m4a'),
-                remove_temp=True,
-                threads=2  # Limit threads to avoid memory issues
+                fps=30,
+                preset='medium',
+                bitrate='8000k',
+                audio_bitrate='192k',
+                threads=4,
+                logger=None
             )
             
-            # Memory usage after rendering
-            logger.info(f"Memory usage after rendering: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+            # Clean up
+            final_video.close()
+            audio_clip.close()
             
-            logger.info(f"Successfully created video: {output_path}")
+            logger.info(f"Successfully created video with synchronized audio: {output_path}")
             return output_path
             
         except Exception as e:
             logger.error(f"Error combining video with audio: {str(e)}")
-            logger.error(f"Detailed error: {traceback.format_exc()}")
-            
-            # Log memory usage on error
-            try:
-                process = psutil.Process()
-                logger.error(f"Memory usage at error: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-            except:
-                pass
-                
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
-        finally:
-            # We don't close clips here because they were passed in from outside
-            # The caller is responsible for closing them
-            pass
 
     def cleanup(self):
         """Remove all temporary files."""

@@ -19,6 +19,7 @@ import psutil
 import requests
 from .caption_renderer import CaptionRenderer
 from ...config import is_feature_enabled
+from moviepy.editor import AudioFileClip
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
@@ -381,6 +382,40 @@ class VideoGenerator:
                 raise Exception(error_msg)
             logger.info("Text processed successfully")
             
+            # Check video preferences for content analysis and segment matching
+            video_prefs = request.videoPreferences if hasattr(request, 'videoPreferences') and request.videoPreferences is not None else {}
+            disable_content_analysis = video_prefs.get('disableContentAnalysis', False)
+            force_simple_distribution = video_prefs.get('forceSimpleDistribution', False)
+            skip_segment_matching = video_prefs.get('skipSegmentMatching', False)
+            
+            logger.info(f"Video preferences: disable_content_analysis={disable_content_analysis}, force_simple_distribution={force_simple_distribution}, skip_segment_matching={skip_segment_matching}")
+            logger.info(f"Full video preferences: {video_prefs}")
+            
+            if disable_content_analysis or force_simple_distribution or skip_segment_matching:
+                # Skip content analysis and use simple distribution
+                logger.info("Using simple distribution for images")
+                matched_segments = []
+                equal_duration = request.duration / len(media_assets['images'])
+                for i, image_path in enumerate(media_assets['images']):
+                    matched_segments.append({
+                        'image_path': image_path,
+                        'duration': equal_duration,
+                        'text': processed_text,  # Use full text for each segment
+                        'topic': 'Simple distribution',
+                        'key_points': ['Simple distribution']
+                    })
+                logger.info(f"Created {len(matched_segments)} segments with simple distribution")
+            else:
+                # Analyze content segments
+                logger.info("Analyzing content segments")
+                segments = text_processor.analyze_content_segments(processed_text)
+                logger.info(f"Identified {len(segments)} content segments")
+                
+                # Match images to segments
+                logger.info("Matching images to segments")
+                matched_segments = text_processor.match_images_to_segments(segments, media_assets['images'])
+                logger.info("Successfully matched images to segments")
+            
             # Monitor memory usage before audio generation
             logger.info(f"Memory before audio generation: {process.memory_info().rss / 1024 / 1024:.2f} MB")
             
@@ -391,10 +426,17 @@ class VideoGenerator:
             
             # Get audio preferences or use defaults
             audio_prefs = request.audioPreferences or {}
-            fade_in = audio_prefs.fadeInDuration if audio_prefs else 2.0
-            fade_out = audio_prefs.fadeOutDuration if audio_prefs else 2.0
+            fade_in = audio_prefs.get('fadeInDuration', 2.0)
+            fade_out = audio_prefs.get('fadeOutDuration', 2.0)
+            strict_duration = audio_prefs.get('strictDuration', True)
+            enforce_duration = audio_prefs.get('enforceDuration', True)
+            match_video_duration = audio_prefs.get('matchVideoDuration', True)
+            trim_audio = audio_prefs.get('trimAudio', True)
+            sync_with_video = audio_prefs.get('syncWithVideo', True)
+            normalize_audio = audio_prefs.get('normalizeAudio', True)
+            max_duration = audio_prefs.get('maxDuration', request.duration - 2)
             
-            logger.info(f"Using audio preferences - fade in: {fade_in}s, fade out: {fade_out}s")
+            logger.info(f"Using audio preferences - fade in: {fade_in}s, fade out: {fade_out}s, strict_duration: {strict_duration}")
             audio_file = audio_generator.generate_audio(
                 processed_text,
                 voice=request.voice,
@@ -415,12 +457,36 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
             
+            # Get actual audio duration and enforce timing
+            audio_clip = AudioFileClip(audio_file)
+            actual_audio_duration = audio_clip.duration
+            audio_clip.close()
+            
+            # If we need to enforce duration, trim or extend the audio
+            if enforce_duration and abs(actual_audio_duration - request.duration) > 0.5:
+                logger.info(f"Audio duration ({actual_audio_duration}s) differs from requested duration ({request.duration}s), adjusting...")
+                if trim_audio:
+                    # Trim audio to match video duration
+                    if actual_audio_duration > request.duration:
+                        logger.info(f"Trimming audio from {actual_audio_duration}s to {request.duration}s")
+                        audio_clip = AudioFileClip(audio_file)
+                        audio_clip = audio_clip.subclip(0, request.duration)
+                        audio_clip.write_audiofile(audio_file)
+                        audio_clip.close()
+                        actual_audio_duration = request.duration
+                    else:
+                        logger.warning(f"Audio is shorter than requested duration ({actual_audio_duration}s < {request.duration}s)")
+                else:
+                    logger.warning(f"Audio duration mismatch but trim_audio is disabled")
+            
+            logger.info(f"Final audio duration: {actual_audio_duration:.2f}s (requested: {request.duration}s)")
+            
             # Monitor memory usage after audio generation
             logger.info(f"Memory after audio generation: {process.memory_info().rss / 1024 / 1024:.2f} MB")
             
             # Process media
             self.update_job_status(redis_client, job_id, "processing_media", progress=50)
-            logger.info(f"Processing media with duration: {request.duration}")
+            logger.info(f"Processing media with duration: {actual_audio_duration}s")
             
             # Calculate segment durations with minimum duration per image
             num_images = len(media_assets.get('images', []))
@@ -448,7 +514,7 @@ class VideoGenerator:
             else:
                 # For a 15-second video, we want 5-7 images
                 # For longer videos, scale up proportionally but cap at 10 images
-                target_num_images = min(max(5, round(request.duration / 3)), 10)
+                target_num_images = min(max(5, round(actual_audio_duration / 3)), 10)
                 
                 # If we have too many images, only use the first target_num_images
                 if num_images > target_num_images:
@@ -456,31 +522,54 @@ class VideoGenerator:
                     num_images = target_num_images
                 logger.info(f"Using {num_images} images with dynamic selection")
             
-            # Calculate duration per image to fill the total duration
-            segment_duration = request.duration / num_images
-            
-            # Ensure minimum duration of 3 seconds per image
-            MIN_DURATION_PER_IMAGE = 3.0
-            if segment_duration < MIN_DURATION_PER_IMAGE:
-                # Recalculate with fewer images if needed
-                num_images = min(num_images, math.floor(request.duration / MIN_DURATION_PER_IMAGE))
-                media_assets['images'] = media_assets['images'][:num_images]
-                segment_duration = request.duration / num_images
-            
-            durations = [segment_duration] * num_images
-            logger.info(f"Using {num_images} images with {segment_duration:.2f}s per image")
-            
             # Get transition preferences
             transition_prefs = request.transitionPreferences
             transition_duration = transition_prefs.duration if transition_prefs else 0.5
+            transition_style = transition_prefs.defaultStyle if transition_prefs else None
             
-            # Create video segments with AI-driven transitions if enabled
-            video_segments = media_processor.create_video_segments(
-                media_assets,
-                durations,
-                video_style=request.style,
-                transition_duration=transition_duration
-            )
+            # Calculate total transition time
+            total_transition_time = (num_images - 1) * transition_duration
+            
+            # Calculate equal duration for each image with minimum duration enforcement
+            available_image_time = actual_audio_duration - total_transition_time
+            min_segment_duration = 2.5  # Minimum 2.5 seconds per segment
+            
+            # Check if we have enough time for all segments with minimum duration
+            required_time = num_images * min_segment_duration + total_transition_time
+            if available_image_time < required_time:
+                # Reduce number of segments to fit minimum duration
+                max_segments = math.floor((actual_audio_duration - total_transition_time) / min_segment_duration)
+                if max_segments < 1:
+                    max_segments = 1
+                logger.warning(f"Not enough time for all segments with minimum duration. Reducing from {num_images} to {max_segments} segments")
+                media_assets['images'] = media_assets['images'][:max_segments]
+                num_images = max_segments
+                # Recalculate total transition time
+                total_transition_time = (num_images - 1) * transition_duration
+                available_image_time = actual_audio_duration - total_transition_time
+            
+            # Calculate equal duration for remaining segments
+            equal_image_duration = available_image_time / num_images
+            
+            logger.info(f"Calculated timing - Total duration: {actual_audio_duration}s, Transition time: {total_transition_time}s, Segments: {num_images}, Segment duration: {equal_image_duration:.2f}s")
+            
+            # Create video segments with equal timing
+            video_segments = []
+            for i, segment in enumerate(matched_segments):
+                # Process image with equal duration
+                clip = media_processor.process_image(segment['image_path'], equal_image_duration)
+                
+                # Apply transition if not the first clip
+                if i > 0:
+                    if transition_style:
+                        transition = media_processor.TRANSITIONS[transition_style]
+                    else:
+                        transition_style = media_processor.select_transition(i, len(matched_segments), request.style)
+                        transition = media_processor.TRANSITIONS[transition_style]
+                    
+                    clip = transition(clip, transition_duration)
+                
+                video_segments.append(clip)
             
             if not video_segments:
                 error_msg = "Failed to create video segments"
@@ -488,7 +577,7 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
                 
-            logger.info(f"Created {len(video_segments)} video segments")
+            logger.info(f"Created {len(video_segments)} video segments with equal timing")
             self.update_job_status(redis_client, job_id, "media_processed", progress=60)
             
             # Combine audio and video
@@ -542,12 +631,13 @@ class VideoGenerator:
                     caption_prefs = None
                     caption_timing = None
                     
-                    # Check if videoPreferences.captions exists in the request
-                    if hasattr(request, 'videoPreferences') and request.videoPreferences:
-                        if hasattr(request.videoPreferences, 'captions') and request.videoPreferences.captions:
-                            captions_enabled = request.videoPreferences.captions.enabled
-                            caption_prefs = request.videoPreferences.captions.dict() if hasattr(request.videoPreferences.captions, 'dict') else request.videoPreferences.captions
-                            caption_timing = getattr(request.videoPreferences.captions, 'timing', None)
+                    # Safely check for videoPreferences and captions
+                    if hasattr(request, 'videoPreferences') and request.videoPreferences is not None:
+                        video_prefs = request.videoPreferences
+                        if hasattr(video_prefs, 'captions') and video_prefs.captions is not None:
+                            captions_enabled = getattr(video_prefs.captions, 'enabled', False)
+                            caption_prefs = video_prefs.captions.dict() if hasattr(video_prefs.captions, 'dict') else video_prefs.captions
+                            caption_timing = getattr(video_prefs.captions, 'timing', None)
                             logger.info(f"Found captions in videoPreferences: enabled={captions_enabled}, has_timing={caption_timing is not None}")
                             if caption_timing:
                                 logger.info(f"Caption timing data: {len(caption_timing)} segments")
