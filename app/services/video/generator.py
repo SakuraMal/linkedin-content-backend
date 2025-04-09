@@ -17,6 +17,7 @@ import shutil
 import tempfile
 import psutil
 import requests
+import openai
 from .caption_renderer import CaptionRenderer
 from ...config import is_feature_enabled
 from moviepy.editor import AudioFileClip
@@ -41,6 +42,21 @@ class VideoGenerator:
         'completed': {'step': 6, 'message': 'Video generation completed'},
         'failed': {'step': 0, 'message': 'Video generation failed'}
     }
+
+    def __init__(self):
+        """Initialize the VideoGenerator service."""
+        self._openai_client = None
+        logger.info("VideoGenerator initialized")
+
+    @property
+    def openai_client(self):
+        """Lazy initialization of OpenAI client."""
+        if self._openai_client is None:
+            api_key = os.getenv('OPENAI_API_KEY')
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY environment variable is not set")
+            self._openai_client = openai.OpenAI(api_key=api_key)
+        return self._openai_client
 
     def update_job_status(self, redis_client: Redis, job_id: str, status: str, progress: int = None, video_url: str = None, error: str = None) -> None:
         """Update job status in Redis."""
@@ -462,9 +478,76 @@ class VideoGenerator:
             actual_audio_duration = audio_clip.duration
             audio_clip.close()
             
-            # If we need to enforce duration, trim or extend the audio
+            # Check if audio is too long and regenerate a shorter version before any trimming
+            if actual_audio_duration > request.duration + 0.5:  # Adding a small buffer
+                logger.info(f"Audio duration ({actual_audio_duration:.2f}s) exceeds requested duration ({request.duration:.2f}s)")
+                logger.info("Generating a shorter version of the text to match the requested duration")
+                
+                # Use OpenAI to generate a shorter version of the text
+                try:
+                    response = self.openai_client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": f"""You are a professional content editor. Create a significantly shorter version of the following text that will take approximately {request.duration - 1} seconds to speak naturally (to allow for fade effects).
+                                
+                                Rules:
+                                1. Maintain the key message and professional tone
+                                2. Make it much more concise while preserving core information
+                                3. Ensure the content flows naturally and ends with a complete thought
+                                4. Make it sound natural when spoken
+                                5. Be very brief but maintain clarity
+                                
+                                The content should be ready to be spoken as-is."""
+                            },
+                            {
+                                "role": "user",
+                                "content": processed_text
+                            }
+                        ],
+                        temperature=0.7,
+                        max_tokens=500
+                    )
+                    
+                    shorter_text = response.choices[0].message.content.strip()
+                    if shorter_text and len(shorter_text) < len(processed_text):
+                        logger.info(f"Generated shorter text: Original {len(processed_text)} chars -> New {len(shorter_text)} chars")
+                        
+                        # Generate new audio with shorter text
+                        logger.info("Generating new audio with shorter text")
+                        new_audio_file = audio_generator.generate_audio(
+                            shorter_text,
+                            voice=request.voice,
+                            fade_in=fade_in,
+                            fade_out=fade_out
+                        )
+                        
+                        if new_audio_file:
+                            # Replace the old audio file
+                            if os.path.exists(audio_file):
+                                os.remove(audio_file)
+                            audio_file = new_audio_file
+                            temp_files.append(audio_file)
+                            
+                            # Get the new duration
+                            audio_clip = AudioFileClip(audio_file)
+                            actual_audio_duration = audio_clip.duration
+                            audio_clip.close()
+                            
+                            logger.info(f"New audio generated successfully with duration: {actual_audio_duration:.2f}s")
+                        else:
+                            logger.warning("Failed to generate new audio with shorter text, will use original audio")
+                    else:
+                        logger.warning("Failed to generate shorter text or result wasn't shorter, will use original audio")
+                        
+                except Exception as e:
+                    logger.error(f"Error generating shorter text: {str(e)}")
+                    logger.warning("Will use original audio due to regeneration failure")
+            
+            # If we still need to enforce duration, trim or extend the audio
             if enforce_duration and abs(actual_audio_duration - request.duration) > 0.5:
-                logger.info(f"Audio duration ({actual_audio_duration}s) differs from requested duration ({request.duration}s), adjusting...")
+                logger.info(f"Audio duration ({actual_audio_duration}s) still differs from requested duration ({request.duration}s), adjusting...")
                 if trim_audio:
                     # Trim audio to match video duration
                     if actual_audio_duration > request.duration:
