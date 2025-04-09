@@ -496,32 +496,6 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
                 
-            # Check if we should use all custom images
-            use_all_custom_images = (
-                hasattr(request, 'videoPreferences') and 
-                request.videoPreferences and 
-                getattr(request.videoPreferences, 'useOnlyCustomImages', False) and
-                getattr(request.videoPreferences, 'customImageCount', 0) > 0
-            )
-            
-            if use_all_custom_images:
-                # Use exactly the number of custom images specified
-                target_num_images = request.videoPreferences.customImageCount
-                if num_images > target_num_images:
-                    media_assets['images'] = media_assets['images'][:target_num_images]
-                    num_images = target_num_images
-                logger.info(f"Using all {num_images} custom images as requested")
-            else:
-                # For a 15-second video, we want 5-7 images
-                # For longer videos, scale up proportionally but cap at 10 images
-                target_num_images = min(max(5, round(actual_audio_duration / 3)), 10)
-                
-                # If we have too many images, only use the first target_num_images
-                if num_images > target_num_images:
-                    media_assets['images'] = media_assets['images'][:target_num_images]
-                    num_images = target_num_images
-                logger.info(f"Using {num_images} images with dynamic selection")
-            
             # Get transition preferences
             transition_prefs = request.transitionPreferences
             transition_duration = transition_prefs.duration if transition_prefs else 0.5
@@ -530,34 +504,50 @@ class VideoGenerator:
             # Calculate total transition time
             total_transition_time = (num_images - 1) * transition_duration
             
-            # Calculate equal duration for each image with minimum duration enforcement
+            # Calculate equal duration for each image
             available_image_time = actual_audio_duration - total_transition_time
-            min_segment_duration = 2.5  # Minimum 2.5 seconds per segment
             
-            # Check if we have enough time for all segments with minimum duration
-            required_time = num_images * min_segment_duration + total_transition_time
-            if available_image_time < required_time:
-                # Reduce number of segments to fit minimum duration
-                max_segments = math.floor((actual_audio_duration - total_transition_time) / min_segment_duration)
-                if max_segments < 1:
-                    max_segments = 1
-                logger.warning(f"Not enough time for all segments with minimum duration. Reducing from {num_images} to {max_segments} segments")
-                media_assets['images'] = media_assets['images'][:max_segments]
-                num_images = max_segments
-                # Recalculate total transition time
-                total_transition_time = (num_images - 1) * transition_duration
-                available_image_time = actual_audio_duration - total_transition_time
-            
-            # Calculate equal duration for remaining segments
-            equal_image_duration = available_image_time / num_images
+            # For stock media, always use equal duration for all images
+            if is_stock_media_direct:
+                equal_image_duration = available_image_time / num_images
+                logger.info(f"Stock media: Using equal duration of {equal_image_duration:.2f}s for all {num_images} images")
+            else:
+                # For non-stock media, enforce minimum duration
+                min_segment_duration = 2.5  # Minimum 2.5 seconds per segment
+                
+                # Check if we have enough time for all segments with minimum duration
+                required_time = num_images * min_segment_duration + total_transition_time
+                if available_image_time < required_time:
+                    # Reduce number of segments to fit minimum duration
+                    max_segments = math.floor((actual_audio_duration - total_transition_time) / min_segment_duration)
+                    if max_segments < 1:
+                        max_segments = 1
+                    logger.warning(f"Not enough time for all segments with minimum duration. Reducing from {num_images} to {max_segments} segments")
+                    media_assets['images'] = media_assets['images'][:max_segments]
+                    num_images = max_segments
+                    # Recalculate total transition time
+                    total_transition_time = (num_images - 1) * transition_duration
+                    available_image_time = actual_audio_duration - total_transition_time
+                
+                # Calculate equal duration for remaining segments
+                equal_image_duration = available_image_time / num_images
             
             logger.info(f"Calculated timing - Total duration: {actual_audio_duration}s, Transition time: {total_transition_time}s, Segments: {num_images}, Segment duration: {equal_image_duration:.2f}s")
             
             # Create video segments with equal timing
             video_segments = []
+            logger.info(f"=== VIDEO SEGMENT DETAILS ===")
+            logger.info(f"Total images available: {len(matched_segments)}")
+            logger.info(f"Video duration: {actual_audio_duration:.2f}s")
+            logger.info(f"Transition duration: {transition_duration:.2f}s")
+            logger.info(f"Total transition time: {total_transition_time:.2f}s")
+            logger.info(f"Available image time: {available_image_time:.2f}s")
+            logger.info(f"Equal duration per image: {equal_image_duration:.2f}s")
+            
             for i, segment in enumerate(matched_segments):
                 # Process image with equal duration
                 clip = media_processor.process_image(segment['image_path'], equal_image_duration)
+                logger.info(f"Segment {i+1}: Processing image {segment['image_path']} with duration {equal_image_duration:.2f}s")
                 
                 # Apply transition if not the first clip
                 if i > 0:
@@ -568,6 +558,7 @@ class VideoGenerator:
                         transition = media_processor.TRANSITIONS[transition_style]
                     
                     clip = transition(clip, transition_duration)
+                    logger.info(f"Segment {i+1}: Applied {transition_style} transition of {transition_duration:.2f}s")
                 
                 video_segments.append(clip)
             
@@ -577,7 +568,12 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
                 
-            logger.info(f"Created {len(video_segments)} video segments with equal timing")
+            logger.info(f"=== FINAL VIDEO SEGMENT SUMMARY ===")
+            logger.info(f"Total segments created: {len(video_segments)}")
+            logger.info(f"Total video duration: {actual_audio_duration:.2f}s")
+            logger.info(f"Average segment duration: {equal_image_duration:.2f}s")
+            logger.info(f"Total transition time: {total_transition_time:.2f}s")
+            logger.info(f"Media type: {'Stock' if is_stock_media_direct else 'User/Custom'}")
             self.update_job_status(redis_client, job_id, "media_processed", progress=60)
             
             # Combine audio and video
