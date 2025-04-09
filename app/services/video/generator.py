@@ -626,6 +626,29 @@ class VideoGenerator:
             transition_prefs = request.transitionPreferences
             transition_duration = transition_prefs.duration if transition_prefs else 0.5
             transition_style = transition_prefs.defaultStyle if transition_prefs else None
+
+            # If no transition style is set, try to get it from videoPreferences
+            if transition_style is None and hasattr(request, 'videoPreferences') and request.videoPreferences is not None:
+                video_prefs = request.videoPreferences
+                if hasattr(video_prefs, 'transitionStyle') and video_prefs.transitionStyle:
+                    # Convert string to TransitionStyle enum if needed
+                    from ...models.video import TransitionStyle
+                    try:
+                        transition_style_str = video_prefs.transitionStyle.upper()
+                        if hasattr(TransitionStyle, transition_style_str):
+                            transition_style = getattr(TransitionStyle, transition_style_str)
+                        else:
+                            # Handle common transition styles from frontend
+                            if video_prefs.transitionStyle == 'crossfade':
+                                transition_style = TransitionStyle.CROSSFADE
+                            elif video_prefs.transitionStyle == 'cinematic':
+                                transition_style = TransitionStyle.FADE
+                            elif video_prefs.transitionStyle == 'dynamic':
+                                transition_style = TransitionStyle.ZOOM
+                    except Exception as e:
+                        logger.warning(f"Failed to convert transition style '{video_prefs.transitionStyle}': {e}")
+
+            logger.info(f"Using transition style: {transition_style}")
             
             # Calculate total transition time
             total_transition_time = (num_images - 1) * transition_duration
