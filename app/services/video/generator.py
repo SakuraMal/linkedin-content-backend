@@ -505,8 +505,13 @@ class VideoGenerator:
                     logger.info(f"Attempting to generate shorter audio (attempt {current_attempt}/{max_attempts})")
                     
                     # Make target duration shorter with each attempt to account for speaking variations
-                    target_duration = request.duration - (0.5 * current_attempt)
-                    if target_duration < 5:  # Don't go too short
+                    # Use more aggressive scaling that increases with each attempt and accounts for how far we are from target
+                    duration_difference = actual_audio_duration - request.duration
+                    scaling_factor = 1.0 + (0.5 * current_attempt)  # Gets more aggressive with each attempt
+                    target_duration = request.duration - (duration_difference / scaling_factor)
+                    
+                    # Ensure we don't go too short
+                    if target_duration < 5:
                         target_duration = 5
                     
                     logger.info(f"Generating a very concise version of the text for target duration of {target_duration:.2f}s")
@@ -518,16 +523,17 @@ class VideoGenerator:
                             messages=[
                                 {
                                     "role": "system",
-                                    "content": f"""You are a professional content editor. Create an extremely concise version of the following text that will take approximately {target_duration} seconds to speak naturally (allowing for fade effects).
+                                    "content": f"""You are a professional content editor. Create an EXTREMELY concise version of the following text that will take EXACTLY {target_duration} seconds to speak naturally.
                                     
                                     Rules:
-                                    1. Be EXTREMELY brief while maintaining the key message
-                                    2. Use only the most essential information - cut ruthlessly
-                                    3. Use shorter words and simpler sentences
-                                    4. Ensure the content still flows naturally and makes sense
-                                    5. Keep it extremely short but maintain clarity
+                                    1. The final text MUST be spoken in {target_duration} seconds - this is CRITICAL
+                                    2. Cut ruthlessly while preserving core message
+                                    3. Use shortest possible words and simplest sentences
+                                    4. Remove all optional content, examples, and elaborations
+                                    5. Focus only on the most essential point
+                                    6. Target approximately {int(target_duration * 2.5)} words total
                                     
-                                    The length of your response is CRITICAL - it must be spoken in {target_duration} seconds or less.
+                                    The length of your response is the HIGHEST priority - it MUST be spoken in {target_duration} seconds or less.
                                     """
                                 },
                                 {
