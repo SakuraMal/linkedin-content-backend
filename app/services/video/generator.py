@@ -430,14 +430,31 @@ class VideoGenerator:
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise Exception(error_msg)
                 
-            # For a 15-second video, we want 5-7 images
-            # For longer videos, scale up proportionally but cap at 10 images
-            target_num_images = min(max(5, round(request.duration / 3)), 10)
+            # Check if we should use all custom images
+            use_all_custom_images = (
+                hasattr(request, 'videoPreferences') and 
+                request.videoPreferences and 
+                getattr(request.videoPreferences, 'useOnlyCustomImages', False) and
+                getattr(request.videoPreferences, 'customImageCount', 0) > 0
+            )
             
-            # If we have too many images, only use the first target_num_images
-            if num_images > target_num_images:
-                media_assets['images'] = media_assets['images'][:target_num_images]
-                num_images = target_num_images
+            if use_all_custom_images:
+                # Use exactly the number of custom images specified
+                target_num_images = request.videoPreferences.customImageCount
+                if num_images > target_num_images:
+                    media_assets['images'] = media_assets['images'][:target_num_images]
+                    num_images = target_num_images
+                logger.info(f"Using all {num_images} custom images as requested")
+            else:
+                # For a 15-second video, we want 5-7 images
+                # For longer videos, scale up proportionally but cap at 10 images
+                target_num_images = min(max(5, round(request.duration / 3)), 10)
+                
+                # If we have too many images, only use the first target_num_images
+                if num_images > target_num_images:
+                    media_assets['images'] = media_assets['images'][:target_num_images]
+                    num_images = target_num_images
+                logger.info(f"Using {num_images} images with dynamic selection")
             
             # Calculate duration per image to fill the total duration
             segment_duration = request.duration / num_images
