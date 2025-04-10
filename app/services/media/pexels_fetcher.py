@@ -41,14 +41,17 @@ class PexelsFetcher:
             headers = {'Authorization': self.api_key}
             params = {
                 'query': query,
-                'per_page': per_page,
+                'per_page': per_page * 2,  # Request more to filter better
                 'size': 'medium',  # Balance between quality and download speed
+                'orientation': 'landscape'  # Prefer landscape videos for professional look
             }
             
+            logger.info(f"Searching Pexels for videos with query: '{query}'")
             response = requests.get(f"{self.BASE_URL}/search", headers=headers, params=params)
             response.raise_for_status()
             
             videos = response.json().get('videos', [])
+            logger.info(f"Found {len(videos)} total videos for query: '{query}'")
             
             # Filter videos by duration and get best quality within size limit
             filtered_videos = []
@@ -57,9 +60,14 @@ class PexelsFetcher:
                 if min_duration <= duration <= max_duration:
                     # Get the medium quality video file
                     video_files = video.get('video_files', [])
+                    
+                    # Prefer HD quality first, then standard
                     medium_quality = next(
-                        (f for f in video_files if f['quality'] == 'hd' and f['width'] <= 1920),
-                        video_files[0] if video_files else None
+                        (f for f in video_files if f['quality'] == 'hd' and f['width'] <= 1920 and f['width'] >= 720),
+                        next(
+                            (f for f in video_files if f['quality'] == 'sd' and f['width'] >= 640),
+                            video_files[0] if video_files else None
+                        )
                     )
                     
                     if medium_quality:
@@ -71,8 +79,13 @@ class PexelsFetcher:
                             'height': medium_quality['height']
                         })
             
-            logger.info(f"Found {len(filtered_videos)} suitable videos for query: {query}")
-            return filtered_videos
+            # Sort by higher resolution and better duration
+            filtered_videos.sort(key=lambda x: (x['width'], -abs(x['duration'] - 6)), reverse=True)
+            
+            logger.info(f"Found {len(filtered_videos)} suitable videos for query: '{query}'")
+            if filtered_videos:
+                logger.info(f"Top video: {filtered_videos[0]['width']}x{filtered_videos[0]['height']}, {filtered_videos[0]['duration']}s")
+            return filtered_videos[:per_page]  # Return only the top ones
             
         except Exception as e:
             logger.error(f"Error searching Pexels videos: {str(e)}")
@@ -112,7 +125,7 @@ class PexelsFetcher:
 
     def fetch_relevant_videos(self, keywords: List[str], count: int = 2) -> List[str]:
         """
-        Fetch relevant videos based on keywords.
+        Fetch relevant videos based on keywords with enhanced selection.
         
         Args:
             keywords: List of keywords to search for
@@ -122,19 +135,48 @@ class PexelsFetcher:
             List of paths to downloaded video files
         """
         video_paths = []
+        searched_keywords = set()
         
+        logger.info(f"Fetching relevant videos for keywords: {keywords}")
+        
+        # Try to get one video for each unique keyword
         for keyword in keywords:
             if len(video_paths) >= count:
                 break
                 
+            # Avoid duplicate searches
+            if keyword in searched_keywords:
+                continue
+                
+            searched_keywords.add(keyword)
             videos = self.search_videos(keyword, per_page=3)
-            for video in videos:
-                if len(video_paths) >= count:
-                    break
-                    
-                video_path = self.download_video(video['url'])
+            
+            # Try to download at least one video per keyword
+            if videos:
+                logger.info(f"Downloading video for keyword '{keyword}': {videos[0]['width']}x{videos[0]['height']}, {videos[0]['duration']}s")
+                video_path = self.download_video(videos[0]['url'])
                 if video_path:
                     video_paths.append(video_path)
+        
+        # If we still need more videos, try other videos from the searches
+        if len(video_paths) < count:
+            for keyword in keywords:
+                if len(video_paths) >= count:
+                    break
+                
+                videos = self.search_videos(keyword, per_page=3)
+                for i, video in enumerate(videos):
+                    # Skip the first one as we already tried it
+                    if i == 0:
+                        continue
+                        
+                    if len(video_paths) >= count:
+                        break
+                        
+                    logger.info(f"Downloading additional video for keyword '{keyword}': {video['width']}x{video['height']}, {video['duration']}s")
+                    video_path = self.download_video(video['url'])
+                    if video_path:
+                        video_paths.append(video_path)
         
         logger.info(f"Successfully fetched {len(video_paths)} videos")
         return video_paths

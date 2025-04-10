@@ -277,56 +277,7 @@ class MediaFetcher:
                 logger.error("No keywords extracted from content")
                 return {'images': [], 'videos': []}
             
-            # Step 3: Perform contextual theme analysis for consistent visual style
-            try:
-                theme_prompt = f"""Analyze this professional content and identify:
-                1. The overall visual tone/mood (e.g., "professional and bright", "sophisticated and muted")
-                2. Setting context (e.g., "modern tech office", "outdoor business setting")
-                3. Industry context (e.g., "healthcare", "finance", "technology")
-                
-                Return only a JSON object with these three fields, keeping values brief but descriptive.
-                
-                Content: {content}"""
-                
-                theme_response = self.openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[{"role": "user", "content": theme_prompt}],
-                    temperature=0.5,
-                    max_tokens=150
-                )
-                
-                theme_context = json.loads(theme_response.choices[0].message.content)
-                logger.info(f"Visual context analysis: {theme_context}")
-                
-                # Add theme context to enhance search terms
-                enhanced_static_keywords = []
-                for keyword in keywords["static_keywords"]:
-                    # For about 50% of keywords, add thematic context
-                    if random.random() > 0.5 and "tone" in theme_context:
-                        enhanced_keyword = f"{keyword}, {theme_context['tone']}"
-                        enhanced_static_keywords.append(enhanced_keyword)
-                    else:
-                        enhanced_static_keywords.append(keyword)
-                
-                enhanced_dynamic_keywords = []
-                for keyword in keywords["dynamic_keywords"]:
-                    # For about 50% of keywords, add setting context
-                    if random.random() > 0.5 and "setting" in theme_context:
-                        enhanced_keyword = f"{keyword} in {theme_context['setting']}"
-                        enhanced_dynamic_keywords.append(enhanced_keyword)
-                    else:
-                        enhanced_dynamic_keywords.append(keyword)
-                
-                # Replace original keywords with enhanced ones
-                keywords["static_keywords"] = enhanced_static_keywords
-                keywords["dynamic_keywords"] = enhanced_dynamic_keywords
-                
-                logger.info("Enhanced search terms with thematic context")
-            except Exception as e:
-                logger.warning(f"Could not perform theme analysis: {str(e)}")
-                # Continue with original keywords
-            
-            # Step 4: Fetch images with enhanced search terms
+            # Step 3: Fetch images with enhanced descriptive terms
             image_paths = []
             for keyword in keywords["static_keywords"]:
                 if len(image_paths) >= num_images:
@@ -342,13 +293,13 @@ class MediaFetcher:
                     if image_path:
                         image_paths.append(image_path)
             
-            # Step 5: Fetch videos with enhanced search terms
+            # Step 4: Fetch videos with enhanced search terms
             video_paths = pexels_fetcher.fetch_relevant_videos(
                 keywords["dynamic_keywords"], 
                 count=num_videos
             )
             
-            logger.info(f"Successfully fetched {len(image_paths)} images and {len(video_paths)} videos with enhanced contextual search")
+            logger.info(f"Successfully fetched {len(image_paths)} images and {len(video_paths)} videos with enhanced descriptive terms")
             return {
                 'images': image_paths,
                 'videos': video_paths
