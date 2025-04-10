@@ -20,7 +20,8 @@ import requests
 import openai
 from .caption_renderer import CaptionRenderer
 from ...config import is_feature_enabled
-from moviepy.editor import AudioFileClip
+from moviepy.editor import AudioFileClip, ColorClip
+import time
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
@@ -162,18 +163,13 @@ class VideoGenerator:
                     stock_url = stock_media_urls[image_id]
                     logger.info(f"Using original stock URL for {image_id}: {stock_url}")
                     
-                    # Download the image to a temporary file
-                    response = requests.get(stock_url, stream=True)
-                    if response.status_code != 200:
-                        logger.warning(f"Could not download stock image from URL: {stock_url}")
-                        continue
-                    
-                    # Save to a temporary file
-                    img_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
-                    img_file.write(response.content)
-                    img_file.close()
-                    
-                    image_files.append(img_file.name)
+                    # Use media_fetcher's robust download method instead of direct requests
+                    local_path = media_fetcher.download_file(stock_url)
+                    if local_path:
+                        logger.info(f"Successfully downloaded stock media to {local_path}")
+                        image_files.append(local_path)
+                    else:
+                        logger.warning(f"Failed to download stock media from URL: {stock_url}")
                     continue
                     
                 # Regular flow: Get image URL from storage
@@ -182,18 +178,13 @@ class VideoGenerator:
                     logger.warning(f"Could not find image with ID: {image_id}")
                     continue
                 
-                # Download the image
-                response = requests.get(image_url, stream=True)
-                if response.status_code != 200:
-                    logger.warning(f"Could not download image from URL: {image_url}")
-                    continue
-                
-                # Save to a temporary file
-                img_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
-                img_file.write(response.content)
-                img_file.close()
-                
-                image_files.append(img_file.name)
+                # Use media_fetcher for user images too for consistent handling
+                local_path = media_fetcher.download_file(image_url)
+                if local_path:
+                    logger.info(f"Successfully downloaded user image {image_id} to {local_path}")
+                    image_files.append(local_path)
+                else:
+                    logger.warning(f"Failed to download user image from URL: {image_url}")
                 
             except Exception as e:
                 logger.error(f"Error fetching image {image_id}: {str(e)}")
@@ -579,9 +570,37 @@ class VideoGenerator:
             # First create all base clips without transitions
             base_clips = []
             for i, image_path in enumerate(media_assets['images']):
-                # Process image with equal duration
-                clip = media_processor.process_image(image_path, equal_image_duration)
-                logger.info(f"Segment {i+1}: Processing image {image_path} with duration {equal_image_duration:.2f}s")
+                time_start = time.time()
+                try:
+                    # Check if file exists
+                    if not os.path.exists(image_path):
+                        logger.error(f"File does not exist: {image_path}")
+                        self.update_job_status(redis_client, job_id, "failed", error=f"Media file not found: {os.path.basename(image_path)}")
+                        raise FileNotFoundError(f"Media file not found: {image_path}")
+                    
+                    # Check file type
+                    is_video = any(image_path.lower().endswith(ext) for ext in ['.mp4', '.mov', '.avi', '.webm', '.mkv'])
+                    
+                    if is_video:
+                        logger.info(f"Processing video file {i+1}/{len(media_assets['images'])}: {image_path}")
+                        try:
+                            clip = media_processor.process_video(image_path, equal_image_duration)
+                            logger.info(f"Successfully created video clip {i+1} with duration {clip.duration}s")
+                        except Exception as e:
+                            logger.error(f"Error processing video file {image_path}: {str(e)}")
+                            # Fallback to using a blank clip if video processing fails
+                            logger.warning(f"Using fallback blank clip for video {image_path}")
+                            blank_clip = ColorClip(media_processor.target_resolution, color=(0,0,0))
+                            clip = blank_clip.set_duration(equal_image_duration)
+                    else:
+                        logger.info(f"Processing image file {i+1}/{len(media_assets['images'])}: {image_path}")
+                        clip = media_processor.process_image(image_path, equal_image_duration)
+                        logger.info(f"Successfully created image clip {i+1} with duration {clip.duration}s")
+                except Exception as e:
+                    logger.error(f"Error processing media file {image_path}: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    self.update_job_status(redis_client, job_id, "failed", error=f"Failed to process media: {str(e)}")
+                    raise
                 base_clips.append((clip, image_path))
             
             # Now apply transitions between clips

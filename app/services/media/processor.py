@@ -192,18 +192,45 @@ class MediaProcessor:
             VideoFileClip: Processed video clip ready for final video
         """
         try:
-            # Load video
-            clip = VideoFileClip(video_path)
+            # Log video processing start
+            logger.info(f"Processing video file: {video_path} with target duration {target_duration}s")
+            
+            # Load video - handle errors better
+            try:
+                clip = VideoFileClip(video_path)
+                logger.info(f"Successfully loaded video: {video_path}, original duration: {clip.duration}s, dimensions: {clip.w}x{clip.h}")
+            except Exception as e:
+                logger.error(f"Error loading video file {video_path}: {str(e)}")
+                raise ValueError(f"Failed to load video file. This may not be a valid video format: {str(e)}")
             
             # Trim or loop video to match target duration
-            if clip.duration > target_duration:
-                # Take the middle section of the video
-                start_time = (clip.duration - target_duration) / 2
-                clip = clip.subclip(start_time, start_time + target_duration)
-            elif clip.duration < target_duration:
-                # Loop the video to reach target duration
-                num_loops = math.ceil(target_duration / clip.duration)
-                clip = concatenate_videoclips([clip] * num_loops).subclip(0, target_duration)
+            original_duration = clip.duration
+            if original_duration > target_duration:
+                # Take a good portion from the video - prefer starting from beginning for stock videos
+                if original_duration > target_duration * 2:
+                    # For long videos, take the most interesting parts at the beginning
+                    # This works better for stock videos which often have good content at the start
+                    start_time = 0.5  # Start a bit after the beginning
+                    clip = clip.subclip(start_time, start_time + target_duration)
+                    logger.info(f"Video trimmed to {target_duration}s starting at {start_time}s")
+                else:
+                    # For shorter videos, take the middle section
+                    start_time = (original_duration - target_duration) / 2
+                    clip = clip.subclip(start_time, start_time + target_duration)
+                    logger.info(f"Video trimmed to {target_duration}s from middle section")
+            elif original_duration < target_duration:
+                # For short videos, we'll loop or extend them
+                if original_duration > 1.0:  # Only loop if it's long enough to be meaningful
+                    # Loop the video to reach target duration
+                    num_loops = math.ceil(target_duration / original_duration)
+                    clip = concatenate_videoclips([clip] * num_loops).subclip(0, target_duration)
+                    logger.info(f"Video looped {num_loops} times to reach {target_duration}s")
+                else:
+                    # For very short clips, extend their duration
+                    clip = clip.fx(vfx.speedx, original_duration / target_duration)
+                    logger.info(f"Very short video extended from {original_duration}s to {target_duration}s")
+            
+            logger.info(f"Video duration adjusted: {original_duration}s → {clip.duration}s")
             
             # Resize maintaining aspect ratio
             target_ratio = self.target_resolution[0] / self.target_resolution[1]
@@ -213,13 +240,27 @@ class MediaProcessor:
                 # Video is wider than target
                 new_height = self.target_resolution[1]
                 new_width = int(new_height * clip_ratio)
+                logger.info(f"Resizing video (wider): {clip.w}x{clip.h} → {new_width}x{new_height}")
             else:
                 # Video is taller than target
                 new_width = self.target_resolution[0]
                 new_height = int(new_width / clip_ratio)
+                logger.info(f"Resizing video (taller): {clip.w}x{clip.h} → {new_width}x{new_height}")
             
-            # Resize video
-            clip = clip.resize(width=new_width, height=new_height)
+            # Resize video with higher quality settings
+            try:
+                clip = clip.resize(width=new_width, height=new_height)
+                logger.info(f"Video successfully resized to {new_width}x{new_height}")
+            except Exception as resize_error:
+                logger.error(f"Error during video resize: {str(resize_error)}")
+                # Fallback to simpler resize method if the standard one fails
+                try:
+                    clip = clip.resize(newsize=(new_width, new_height))
+                    logger.info(f"Video resized with fallback method to {new_width}x{new_height}")
+                except Exception as fallback_error:
+                    logger.error(f"Fallback resize also failed: {str(fallback_error)}")
+                    # Last resort, don't resize but continue
+                    logger.warning(f"Using original video size: {clip.w}x{clip.h}")
             
             # Create a black background clip
             bg = ColorClip(self.target_resolution, color=(0,0,0))
@@ -233,11 +274,12 @@ class MediaProcessor:
             # Composite with background
             final_clip = CompositeVideoClip([bg, clip], size=self.target_resolution)
             
-            logger.info(f"Successfully processed video: {video_path}")
+            logger.info(f"Successfully processed video: {video_path}, final duration: {final_clip.duration}s")
             return final_clip
             
         except Exception as e:
             logger.error(f"Error processing video {video_path}: {str(e)}")
+            logger.error(traceback.format_exc())
             raise
 
     def create_video_segments(self, 
