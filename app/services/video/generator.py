@@ -716,13 +716,18 @@ class VideoGenerator:
             logger.info(f"Equal duration per image: {equal_image_duration:.2f}s")
             logger.info(f"Using transition style: {transition_style}")
             
+            # First create all base clips without transitions
+            base_clips = []
             for i, segment in enumerate(matched_segments):
                 # Process image with equal duration
                 clip = media_processor.process_image(segment['image_path'], equal_image_duration)
                 logger.info(f"Segment {i+1}: Processing image {segment['image_path']} with duration {equal_image_duration:.2f}s")
-                
-                # Apply transition if not the first clip
+                base_clips.append((clip, segment['image_path']))
+            
+            # Now apply transitions between clips
+            for i, (clip, image_path) in enumerate(base_clips):
                 if i > 0:
+                    # Determine transition style to use
                     if transition_style:
                         try:
                             transition = media_processor.TRANSITIONS[transition_style]
@@ -733,13 +738,32 @@ class VideoGenerator:
                             transition_style = TransitionStyle.CROSSFADE
                             transition = media_processor.TRANSITIONS[TransitionStyle.CROSSFADE]
                     else:
-                        selected_style = media_processor.select_transition(i, len(matched_segments), request.style)
+                        from ...models.video import TransitionStyle
+                        selected_style = TransitionStyle.CROSSFADE
                         transition = media_processor.TRANSITIONS[selected_style]
                         transition_style = selected_style
                         logger.info(f"Segment {i+1}: Dynamically selected transition style: {transition_style}")
                     
-                    clip = transition(clip, transition_duration)
-                    logger.info(f"Segment {i+1}: Applied {transition_style} transition of {transition_duration:.2f}s")
+                    # Apply transition effect more explicitly
+                    logger.info(f"Segment {i+1}: Applying {transition_style} transition with duration {transition_duration:.2f}s")
+                    try:
+                        # Apply the transition and ensure it takes effect
+                        if transition_style == TransitionStyle.CROSSFADE:
+                            clip = clip.crossfadein(transition_duration)
+                        elif transition_style == TransitionStyle.FADE:
+                            clip = clip.fadein(transition_duration)
+                        elif transition_style == TransitionStyle.ZOOM:
+                            # Start at 70% size and zoom to 100%
+                            start_size = 0.7
+                            clip = clip.resize(lambda t: start_size + (1-start_size)*min(1, t/transition_duration))
+                        # Note: Slide transitions need to be handled differently - they're added in the composite step
+                        
+                        logger.info(f"Segment {i+1}: Successfully applied {transition_style} transition")
+                    except Exception as e:
+                        logger.error(f"Error applying transition: {str(e)}")
+                        logger.error(traceback.format_exc())
+                        # Fallback to no transition
+                        logger.warning(f"Falling back to no transition due to error")
                 
                 video_segments.append(clip)
             

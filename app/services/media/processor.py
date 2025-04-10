@@ -28,13 +28,13 @@ class MediaProcessor:
         'vertical': (1080, 1920)     # 9:16 - Full vertical
     }
 
-    # Available transition effects
+    # Available transition effects - FIXED with more pronounced transitions
     TRANSITIONS = {
         TransitionStyle.CROSSFADE: lambda clip, duration: clip.crossfadein(duration),
         TransitionStyle.FADE: lambda clip, duration: clip.fadein(duration),
-        TransitionStyle.SLIDE_LEFT: lambda clip, duration: clip.set_position(lambda t: ((1-t/duration)*clip.w, 0) if t < duration else (0,0)),
-        TransitionStyle.SLIDE_RIGHT: lambda clip, duration: clip.set_position(lambda t: ((-t/duration*clip.w, 0) if t < duration else (0,0))),
-        TransitionStyle.ZOOM: lambda clip, duration: clip.set_position(lambda t: ('center')).resize(lambda t: 1 + 0.1*t if t < duration else 1)
+        TransitionStyle.SLIDE_LEFT: lambda clip, duration: clip.set_position(lambda t: ((1-min(1, t/duration))*clip.w, 0) if t < duration*1.5 else (0,0)),
+        TransitionStyle.SLIDE_RIGHT: lambda clip, duration: clip.set_position(lambda t: ((-min(1, t/duration)*clip.w, 0) if t < duration*1.5 else (0,0))),
+        TransitionStyle.ZOOM: lambda clip, duration: clip.set_position('center').resize(lambda t: max(0.7, min(1, 0.7 + 0.3*t/duration)) if t < duration*1.5 else 1)
     }
 
     # Style-based transition preferences
@@ -273,12 +273,15 @@ class MediaProcessor:
                 if i > 0:
                     # Use user's chosen transition style if provided, otherwise use style-based selection
                     if transition_style:
+                        logger.info(f"Using user-specified transition style: {transition_style}")
                         transition = self.TRANSITIONS[transition_style]
                     else:
-                        transition_style = self.select_transition(i, len(media_files['images']), video_style)
-                        transition = self.TRANSITIONS[transition_style]
+                        style_transition = self.select_transition(i, len(media_files['images']), video_style)
+                        logger.info(f"Using style-based transition: {style_transition}")
+                        transition = self.TRANSITIONS[style_transition]
                     
                     # Apply transition
+                    logger.info(f"Applying transition with duration {transition_duration}s for clip {i}")
                     clip = transition(clip, transition_duration)
                 
                 clips.append(clip)
@@ -310,26 +313,11 @@ class MediaProcessor:
             audio_clip = self.process_audio(audio_path)
             total_audio_duration = audio_clip.duration
             
-            # Calculate equal duration for each clip
-            num_clips = len(video_clips)
-            clip_duration = total_audio_duration / num_clips
+            logger.info(f"Combining {len(video_clips)} video clips with audio (total duration: {total_audio_duration}s)")
             
-            # Adjust each clip's duration
-            adjusted_clips = []
-            for i, clip in enumerate(video_clips):
-                # Set equal duration for each clip
-                adjusted_clip = clip.set_duration(clip_duration)
-                
-                # Apply transition if not the last clip
-                if i < num_clips - 1:
-                    transition = self.select_transition(i, num_clips, VideoStyle.PROFESSIONAL)
-                    transition_func = self.TRANSITIONS[transition]
-                    adjusted_clip = transition_func(adjusted_clip, self.transition_duration)
-                
-                adjusted_clips.append(adjusted_clip)
-            
-            # Concatenate all clips
-            final_video = concatenate_videoclips(adjusted_clips)
+            # Concatenate clips without adjusting durations again (they should already be set)
+            final_video = concatenate_videoclips(video_clips, method="compose")
+            logger.info(f"Final video duration after concatenation: {final_video.duration}s")
             
             # Set audio
             final_video = final_video.set_audio(audio_clip)
@@ -338,6 +326,7 @@ class MediaProcessor:
             output_path = os.path.join(self.temp_dir, "final_video.mp4")
             
             # Write video with high quality settings
+            logger.info(f"Writing final video to {output_path} with fps=30, bitrate=8000k")
             final_video.write_videofile(
                 output_path,
                 codec='libx264',
@@ -371,8 +360,8 @@ class MediaProcessor:
         except Exception as e:
             logger.error(f"Error cleaning up temporary files: {str(e)}")
 
-# Create a singleton instance with square aspect ratio and crossfade transitions
+# Create a singleton instance with square aspect ratio and longer transition duration
 media_processor = MediaProcessor(
     aspect_ratio='square',
-    transition_duration=0.5
+    transition_duration=0.8  # Increased from 0.5 to make transitions more visible
 ) 
