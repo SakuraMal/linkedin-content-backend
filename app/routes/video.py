@@ -155,6 +155,14 @@ def generate_video():
             elif "transition_preferences" in request_data:
                 request_data_normalized["transitionPreferences"] = request_data["transition_preferences"]
                 
+            # Handle videoPreferences field which contains transition styles and other video settings
+            if "videoPreferences" in request_data:
+                request_data_normalized["videoPreferences"] = request_data["videoPreferences"]
+                logging.info(f"Found videoPreferences in request with transitionStyle: {request_data['videoPreferences'].get('transitionStyle', 'not set')}")
+            elif "video_preferences" in request_data:
+                request_data_normalized["videoPreferences"] = request_data["video_preferences"]
+                logging.info(f"Found video_preferences in request with transitionStyle: {request_data['video_preferences'].get('transitionStyle', 'not set')}")
+                
             # Handle content_analysis field which might use different structures
             if "content_analysis" in request_data:
                 # Store original content analysis in Sentry for debugging

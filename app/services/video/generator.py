@@ -407,234 +407,87 @@ class VideoGenerator:
             logger.info(f"Video preferences: disable_content_analysis={disable_content_analysis}, force_simple_distribution={force_simple_distribution}, skip_segment_matching={skip_segment_matching}")
             logger.info(f"Full video preferences: {video_prefs}")
             
-            # For stock media, always use simple distribution with all images, regardless of content analysis
-            if is_stock_media_direct:
-                logger.info("Using simple distribution for all stock media images")
-                matched_segments = []
-                num_images = len(media_assets['images'])
-                equal_duration = request.duration / num_images
-                for i, image_path in enumerate(media_assets['images']):
-                    matched_segments.append({
-                        'image_path': image_path,
-                        'duration': equal_duration,
-                        'text': processed_text,  # Use full text for each segment
-                        'topic': 'Stock media segment',
-                        'key_points': ['Stock media']
-                    })
-                logger.info(f"Created {len(matched_segments)} segments with simple distribution for stock media")
-            elif disable_content_analysis or force_simple_distribution or skip_segment_matching:
-                # Skip content analysis and use simple distribution
-                logger.info("Using simple distribution for images")
-                matched_segments = []
-                equal_duration = request.duration / len(media_assets['images'])
-                for i, image_path in enumerate(media_assets['images']):
-                    matched_segments.append({
-                        'image_path': image_path,
-                        'duration': equal_duration,
-                        'text': processed_text,  # Use full text for each segment
-                        'topic': 'Simple distribution',
-                        'key_points': ['Simple distribution']
-                    })
-                logger.info(f"Created {len(matched_segments)} segments with simple distribution")
-            else:
-                # Analyze content segments
-                logger.info("Analyzing content segments")
-                segments = text_processor.analyze_content_segments(processed_text)
-                logger.info(f"Identified {len(segments)} content segments")
-                
-                # Match images to segments
-                logger.info("Matching images to segments")
-                matched_segments = text_processor.match_images_to_segments(segments, media_assets['images'])
-                logger.info("Successfully matched images to segments")
-            
-            # Monitor memory usage before audio generation
-            logger.info(f"Memory before audio generation: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-            
-            # Generate audio with processed text
-            self.update_job_status(redis_client, job_id, "audio_generating", progress=30)
-            logger.info("Generating audio for processed content")
-            logger.debug("Calling audio_generator.generate_audio")
-            
-            # Get audio preferences or use defaults
-            audio_prefs = request.audioPreferences or {}
-            fade_in = audio_prefs.get('fadeInDuration', 2.0)
-            fade_out = audio_prefs.get('fadeOutDuration', 2.0)
-            strict_duration = audio_prefs.get('strictDuration', True)
-            enforce_duration = audio_prefs.get('enforceDuration', True)
-            match_video_duration = audio_prefs.get('matchVideoDuration', True)
-            trim_audio = audio_prefs.get('trimAudio', True)
-            sync_with_video = audio_prefs.get('syncWithVideo', True)
-            normalize_audio = audio_prefs.get('normalizeAudio', True)
-            max_duration = audio_prefs.get('maxDuration', request.duration - 2)
-            
-            logger.info(f"Using audio preferences - fade in: {fade_in}s, fade out: {fade_out}s, strict_duration: {strict_duration}")
-            audio_file = audio_generator.generate_audio(
-                processed_text,
-                voice=request.voice,
-                fade_in=fade_in,
-                fade_out=fade_out
-            )
-            
-            # Track audio file for cleanup
-            if audio_file:
-                temp_files.append(audio_file)
-            
-            if audio_file:
-                logger.info(f"Audio generated successfully: {audio_file}")
-                self.update_job_status(redis_client, job_id, "audio_generated", progress=40)
-            else:
-                logger.error("Audio generation returned None")
-                error_msg = "Failed to generate audio file - check logs for detailed error"
-                self.update_job_status(redis_client, job_id, "failed", error=error_msg)
-                raise Exception(error_msg)
-            
-            # Get actual audio duration and enforce timing
-            audio_clip = AudioFileClip(audio_file)
-            actual_audio_duration = audio_clip.duration
-            audio_clip.close()
-            
-            # Check if audio is too long and regenerate a shorter version before any trimming
-            if actual_audio_duration > request.duration + 0.5:  # Adding a small buffer
-                logger.info(f"Audio duration ({actual_audio_duration:.2f}s) exceeds requested duration ({request.duration:.2f}s)")
-                
-                # Try up to 3 iterations of progressively shorter text
-                max_attempts = 3
-                current_attempt = 1
-                
-                while current_attempt <= max_attempts and actual_audio_duration > request.duration + 0.5:
-                    logger.info(f"Attempting to generate shorter audio (attempt {current_attempt}/{max_attempts})")
+            # Add more detailed logging about request properties
+            logger.info(f"Request has videoPreferences attr: {hasattr(request, 'videoPreferences')}")
+            if hasattr(request, 'videoPreferences'):
+                logger.info(f"videoPreferences value: {request.videoPreferences}")
+                if request.videoPreferences is not None:
+                    logger.info(f"videoPreferences has transitionStyle: {hasattr(request.videoPreferences, 'transitionStyle')}")
+                    if hasattr(request.videoPreferences, 'transitionStyle'):
+                        logger.info(f"transitionStyle value: '{request.videoPreferences.transitionStyle}'")
                     
-                    # Make target duration shorter with each attempt to account for speaking variations
-                    # Use more aggressive scaling that increases with each attempt and accounts for how far we are from target
-                    duration_difference = actual_audio_duration - request.duration
-                    scaling_factor = 1.0 + (0.5 * current_attempt)  # Gets more aggressive with each attempt
-                    target_duration = request.duration - (duration_difference / scaling_factor)
-                    
-                    # Ensure we don't go too short
-                    if target_duration < 5:
-                        target_duration = 5
-                    
-                    logger.info(f"Generating a very concise version of the text for target duration of {target_duration:.2f}s")
-                    
-                    # Use OpenAI to generate a shorter version of the text
-                    try:
-                        response = self.openai_client.chat.completions.create(
-                            model="gpt-3.5-turbo",
-                            messages=[
-                                {
-                                    "role": "system",
-                                    "content": f"""You are a professional content editor. Create an EXTREMELY concise version of the following text that will take EXACTLY {target_duration} seconds to speak naturally.
-                                    
-                                    Rules:
-                                    1. The final text MUST be spoken in {target_duration} seconds - this is CRITICAL
-                                    2. Cut ruthlessly while preserving core message
-                                    3. Use shortest possible words and simplest sentences
-                                    4. Remove all optional content, examples, and elaborations
-                                    5. Focus only on the most essential point
-                                    6. Target approximately {int(target_duration * 2.5)} words total
-                                    
-                                    The length of your response is the HIGHEST priority - it MUST be spoken in {target_duration} seconds or less.
-                                    """
-                                },
-                                {
-                                    "role": "user",
-                                    "content": processed_text
-                                }
-                            ],
-                            temperature=0.7,
-                            max_tokens=500
-                        )
-                        
-                        shorter_text = response.choices[0].message.content.strip()
-                        if shorter_text and len(shorter_text) < len(processed_text):
-                            logger.info(f"Generated shorter text: Original {len(processed_text)} chars -> New {len(shorter_text)} chars (attempt {current_attempt})")
-                            
-                            # Generate new audio with shorter text
-                            logger.info("Generating new audio with shorter text")
-                            new_audio_file = audio_generator.generate_audio(
-                                shorter_text,
-                                voice=request.voice,
-                                fade_in=fade_in,
-                                fade_out=fade_out
-                            )
-                            
-                            if new_audio_file:
-                                # Replace the old audio file
-                                if os.path.exists(audio_file):
-                                    os.remove(audio_file)
-                                audio_file = new_audio_file
-                                temp_files.append(audio_file)
-                                
-                                # Get the new duration
-                                audio_clip = AudioFileClip(audio_file)
-                                actual_audio_duration = audio_clip.duration
-                                audio_clip.close()
-                                
-                                logger.info(f"New audio generated with duration: {actual_audio_duration:.2f}s (attempt {current_attempt})")
-                                processed_text = shorter_text  # Update processed text for potential next iteration
-                            else:
-                                logger.warning(f"Failed to generate new audio with shorter text (attempt {current_attempt})")
-                                break
-                        else:
-                            logger.warning(f"Failed to generate shorter text or result wasn't shorter (attempt {current_attempt})")
-                            break
-                            
-                    except Exception as e:
-                        logger.error(f"Error generating shorter text: {str(e)}")
-                        logger.warning("Will use existing audio due to regeneration failure")
-                        break
-                    
-                    current_attempt += 1
-                
-                logger.info(f"Final audio duration after {current_attempt-1} regeneration attempts: {actual_audio_duration:.2f}s")
-            
-            # If we still need to enforce duration, trim or extend the audio
-            if enforce_duration and abs(actual_audio_duration - request.duration) > 0.5:
-                logger.info(f"Audio duration ({actual_audio_duration}s) still differs from requested duration ({request.duration}s), adjusting...")
-                if trim_audio:
-                    # Trim audio to match video duration
-                    if actual_audio_duration > request.duration:
-                        logger.info(f"Trimming audio from {actual_audio_duration}s to {request.duration}s")
-                        audio_clip = AudioFileClip(audio_file)
-                        audio_clip = audio_clip.subclip(0, request.duration)
-                        audio_clip.write_audiofile(audio_file)
-                        audio_clip.close()
-                        actual_audio_duration = request.duration
-                    else:
-                        logger.warning(f"Audio is shorter than requested duration ({actual_audio_duration}s < {request.duration}s)")
-                else:
-                    logger.warning(f"Audio duration mismatch but trim_audio is disabled")
-            
-            logger.info(f"Final audio duration: {actual_audio_duration:.2f}s (requested: {request.duration}s)")
-            
-            # Monitor memory usage after audio generation
-            logger.info(f"Memory after audio generation: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-            
-            # Process media
-            self.update_job_status(redis_client, job_id, "processing_media", progress=50)
-            logger.info(f"Processing media with duration: {actual_audio_duration}s")
-            
-            # Calculate segment durations with minimum duration per image
-            num_images = len(media_assets.get('images', []))
-            if num_images == 0:
-                error_msg = "No images available for processing"
-                logger.error(error_msg)
-                self.update_job_status(redis_client, job_id, "failed", error=error_msg)
-                raise Exception(error_msg)
-                
+                    # If videoPreferences is a dict, check keys
+                    if isinstance(request.videoPreferences, dict):
+                        logger.info(f"videoPreferences keys: {list(request.videoPreferences.keys())}")
+                        if 'transitionStyle' in request.videoPreferences:
+                            logger.info(f"transitionStyle in dict: '{request.videoPreferences['transitionStyle']}'")
+
             # Get transition preferences
             transition_prefs = request.transitionPreferences
             transition_duration = transition_prefs.duration if transition_prefs else 0.5
             transition_style = transition_prefs.defaultStyle if transition_prefs else None
+            
+            # Add additional logging for videoPreferences
+            logger.info(f"Request has videoPreferences attribute: {hasattr(request, 'videoPreferences')}")
+            if hasattr(request, 'videoPreferences'):
+                logger.info(f"videoPreferences is None: {request.videoPreferences is None}")
+                if request.videoPreferences is not None:
+                    if hasattr(request.videoPreferences, 'transitionStyle'):
+                        logger.info(f"videoPreferences.transitionStyle value: '{request.videoPreferences.transitionStyle}'")
+                    elif isinstance(request.videoPreferences, dict) and 'transitionStyle' in request.videoPreferences:
+                        logger.info(f"videoPreferences dict has transitionStyle: '{request.videoPreferences['transitionStyle']}'")
 
             # If no transition style is set, try to get it from videoPreferences
             if transition_style is None and hasattr(request, 'videoPreferences') and request.videoPreferences is not None:
                 video_prefs = request.videoPreferences
-                if hasattr(video_prefs, 'transitionStyle') and video_prefs.transitionStyle:
+                
+                # Handle the case where videoPreferences is a dictionary
+                if isinstance(video_prefs, dict):
+                    logger.info(f"videoPreferences is a dictionary with keys: {list(video_prefs.keys())}")
+                    if 'transitionStyle' in video_prefs and video_prefs['transitionStyle']:
+                        logger.info(f"Using transition style from videoPreferences dict: '{video_prefs['transitionStyle']}'")
+                        
+                        # Convert string to TransitionStyle enum
+                        from ...models.video import TransitionStyle
+                        try:
+                            # Handle mapping of frontend style names to backend enum values
+                            frontend_to_backend = {
+                                'crossfade': TransitionStyle.CROSSFADE,
+                                'cinematic': TransitionStyle.FADE,
+                                'dynamic': TransitionStyle.ZOOM
+                            }
+                            
+                            # Try direct mapping from frontend names
+                            if video_prefs['transitionStyle'].lower() in frontend_to_backend:
+                                transition_style = frontend_to_backend[video_prefs['transitionStyle'].lower()]
+                                logger.info(f"Mapped frontend transition style '{video_prefs['transitionStyle']}' to backend enum {transition_style}")
+                            # Try uppercase enum lookup
+                            elif hasattr(TransitionStyle, video_prefs['transitionStyle'].upper()):
+                                transition_style = getattr(TransitionStyle, video_prefs['transitionStyle'].upper())
+                                logger.info(f"Used direct enum lookup for transition style '{video_prefs['transitionStyle']}'")
+                            else:
+                                # Default to crossfade
+                                logger.warning(f"No mapping found for transition style '{video_prefs['transitionStyle']}', using CROSSFADE")
+                                transition_style = TransitionStyle.CROSSFADE
+                        except Exception as e:
+                            logger.warning(f"Failed to convert dictionary transition style '{video_prefs['transitionStyle']}': {e}")
+                            # Fallback mapping
+                            if video_prefs['transitionStyle'] == 'crossfade':
+                                transition_style = TransitionStyle.CROSSFADE
+                            elif video_prefs['transitionStyle'] == 'cinematic':
+                                transition_style = TransitionStyle.FADE
+                            elif video_prefs['transitionStyle'] == 'dynamic':
+                                transition_style = TransitionStyle.ZOOM
+                            else:
+                                transition_style = TransitionStyle.CROSSFADE
+                            logger.info(f"Exception fallback: Used direct mapping for '{video_prefs['transitionStyle']}' to {transition_style}")
+                # Handle the case where videoPreferences is an object
+                elif hasattr(video_prefs, 'transitionStyle') and video_prefs.transitionStyle:
+                    logger.info(f"Using transition style from videoPreferences object: '{video_prefs.transitionStyle}'")
+                    
                     # Convert string to TransitionStyle enum if needed
                     from ...models.video import TransitionStyle
                     try:
-                        logger.info(f"Attempting to use transition style from videoPreferences: '{video_prefs.transitionStyle}'")
                         # Handle mapping of frontend style names to backend enum values
                         frontend_to_backend = {
                             'crossfade': TransitionStyle.CROSSFADE,
@@ -656,7 +509,7 @@ class VideoGenerator:
                             transition_style = TransitionStyle.CROSSFADE
                             
                     except Exception as e:
-                        logger.warning(f"Failed to convert transition style '{video_prefs.transitionStyle}': {e}")
+                        logger.warning(f"Failed to convert object transition style '{video_prefs.transitionStyle}': {e}")
                         # Use a safer direct mapping approach as fallback
                         if video_prefs.transitionStyle == 'crossfade':
                             transition_style = TransitionStyle.CROSSFADE
@@ -673,43 +526,42 @@ class VideoGenerator:
             logger.info(f"Final transition style selected: {transition_style}")
             
             # Calculate total transition time
-            total_transition_time = (num_images - 1) * transition_duration
+            total_transition_time = (len(media_assets['images']) - 1) * transition_duration
             
             # Calculate equal duration for each image
-            available_image_time = actual_audio_duration - total_transition_time
+            available_image_time = request.duration - total_transition_time
             
             # For stock media, always use equal duration for all images
             if is_stock_media_direct:
-                equal_image_duration = available_image_time / num_images
-                logger.info(f"Stock media: Using equal duration of {equal_image_duration:.2f}s for all {num_images} images")
+                equal_image_duration = available_image_time / len(media_assets['images'])
+                logger.info(f"Stock media: Using equal duration of {equal_image_duration:.2f}s for all {len(media_assets['images'])} images")
             else:
                 # For non-stock media, enforce minimum duration
                 min_segment_duration = 2.5  # Minimum 2.5 seconds per segment
                 
                 # Check if we have enough time for all segments with minimum duration
-                required_time = num_images * min_segment_duration + total_transition_time
+                required_time = len(media_assets['images']) * min_segment_duration + total_transition_time
                 if available_image_time < required_time:
                     # Reduce number of segments to fit minimum duration
-                    max_segments = math.floor((actual_audio_duration - total_transition_time) / min_segment_duration)
+                    max_segments = math.floor((request.duration - total_transition_time) / min_segment_duration)
                     if max_segments < 1:
                         max_segments = 1
-                    logger.warning(f"Not enough time for all segments with minimum duration. Reducing from {num_images} to {max_segments} segments")
+                    logger.warning(f"Not enough time for all segments with minimum duration. Reducing from {len(media_assets['images'])} to {max_segments} segments")
                     media_assets['images'] = media_assets['images'][:max_segments]
-                    num_images = max_segments
                     # Recalculate total transition time
-                    total_transition_time = (num_images - 1) * transition_duration
-                    available_image_time = actual_audio_duration - total_transition_time
+                    total_transition_time = (max_segments - 1) * transition_duration
+                    available_image_time = request.duration - total_transition_time
                 
                 # Calculate equal duration for remaining segments
-                equal_image_duration = available_image_time / num_images
+                equal_image_duration = available_image_time / len(media_assets['images'])
             
-            logger.info(f"Calculated timing - Total duration: {actual_audio_duration}s, Transition time: {total_transition_time}s, Segments: {num_images}, Segment duration: {equal_image_duration:.2f}s")
+            logger.info(f"Calculated timing - Total duration: {request.duration}s, Transition time: {total_transition_time}s, Segments: {len(media_assets['images'])}, Segment duration: {equal_image_duration:.2f}s")
             
             # Create video segments with equal timing
             video_segments = []
             logger.info(f"=== VIDEO SEGMENT DETAILS ===")
-            logger.info(f"Total images available: {len(matched_segments)}")
-            logger.info(f"Video duration: {actual_audio_duration:.2f}s")
+            logger.info(f"Total images available: {len(media_assets['images'])}")
+            logger.info(f"Video duration: {request.duration:.2f}s")
             logger.info(f"Transition duration: {transition_duration:.2f}s")
             logger.info(f"Total transition time: {total_transition_time:.2f}s")
             logger.info(f"Available image time: {available_image_time:.2f}s")
@@ -718,11 +570,11 @@ class VideoGenerator:
             
             # First create all base clips without transitions
             base_clips = []
-            for i, segment in enumerate(matched_segments):
+            for i, image_path in enumerate(media_assets['images']):
                 # Process image with equal duration
-                clip = media_processor.process_image(segment['image_path'], equal_image_duration)
-                logger.info(f"Segment {i+1}: Processing image {segment['image_path']} with duration {equal_image_duration:.2f}s")
-                base_clips.append((clip, segment['image_path']))
+                clip = media_processor.process_image(image_path, equal_image_duration)
+                logger.info(f"Segment {i+1}: Processing image {image_path} with duration {equal_image_duration:.2f}s")
+                base_clips.append((clip, image_path))
             
             # Now apply transitions between clips
             for i, (clip, image_path) in enumerate(base_clips):
@@ -816,7 +668,7 @@ class VideoGenerator:
                 
             logger.info(f"=== FINAL VIDEO SEGMENT SUMMARY ===")
             logger.info(f"Total segments created: {len(video_segments)}")
-            logger.info(f"Total video duration: {actual_audio_duration:.2f}s")
+            logger.info(f"Total video duration: {request.duration:.2f}s")
             logger.info(f"Average segment duration: {equal_image_duration:.2f}s")
             logger.info(f"Total transition time: {total_transition_time:.2f}s")
             logger.info(f"Media type: {'Stock' if is_stock_media_direct else 'User/Custom'}")
@@ -825,7 +677,7 @@ class VideoGenerator:
             # Combine audio and video
             self.update_job_status(redis_client, job_id, "combining", progress=70)
             logger.info("Combining audio and video")
-            final_video = media_processor.combine_with_audio(video_segments, audio_file)
+            final_video = media_processor.combine_with_audio(video_segments, media_assets['videos'][0])
             logger.info(f"Final video created: {final_video}")
             self.update_job_status(redis_client, job_id, "combined", progress=80)
             
