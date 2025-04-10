@@ -647,6 +647,13 @@ class VideoGenerator:
                                 transition_style = TransitionStyle.ZOOM
                     except Exception as e:
                         logger.warning(f"Failed to convert transition style '{video_prefs.transitionStyle}': {e}")
+                        # Direct fallback to the style from videoPreferences if the conversion fails
+                        if video_prefs.transitionStyle == 'crossfade':
+                            transition_style = TransitionStyle.CROSSFADE
+                        elif video_prefs.transitionStyle == 'cinematic':
+                            transition_style = TransitionStyle.FADE
+                        elif video_prefs.transitionStyle == 'dynamic':
+                            transition_style = TransitionStyle.ZOOM
 
             logger.info(f"Using transition style: {transition_style}")
             
