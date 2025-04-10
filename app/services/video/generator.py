@@ -400,9 +400,17 @@ class VideoGenerator:
             
             # Check video preferences for content analysis and segment matching
             video_prefs = request.videoPreferences if hasattr(request, 'videoPreferences') and request.videoPreferences is not None else {}
-            disable_content_analysis = video_prefs.get('disableContentAnalysis', False)
-            force_simple_distribution = video_prefs.get('forceSimpleDistribution', False)
-            skip_segment_matching = video_prefs.get('skipSegmentMatching', False)
+            
+            # Handle videoPreferences which can be either a dict or a Pydantic model
+            if isinstance(video_prefs, dict):
+                disable_content_analysis = video_prefs.get('disableContentAnalysis', False)
+                force_simple_distribution = video_prefs.get('forceSimpleDistribution', False)
+                skip_segment_matching = video_prefs.get('skipSegmentMatching', False)
+            else:
+                # When it's a Pydantic model, use hasattr/getattr instead of dict.get
+                disable_content_analysis = getattr(video_prefs, 'disableContentAnalysis', False)
+                force_simple_distribution = getattr(video_prefs, 'forceSimpleDistribution', False)
+                skip_segment_matching = getattr(video_prefs, 'skipSegmentMatching', False)
             
             logger.info(f"Video preferences: disable_content_analysis={disable_content_analysis}, force_simple_distribution={force_simple_distribution}, skip_segment_matching={skip_segment_matching}")
             logger.info(f"Full video preferences: {video_prefs}")
