@@ -315,8 +315,9 @@ class MediaProcessor:
             
             logger.info(f"Combining {len(video_clips)} video clips with audio (total duration: {total_audio_duration}s)")
             
-            # Concatenate clips without adjusting durations again (they should already be set)
-            final_video = concatenate_videoclips(video_clips, method="compose")
+            # IMPORTANT: Use method="chain_previews" to preserve transitions between clips
+            # The "compose" method can sometimes reset transition effects
+            final_video = concatenate_videoclips(video_clips, method="chain_previews")
             logger.info(f"Final video duration after concatenation: {final_video.duration}s")
             
             # Set audio

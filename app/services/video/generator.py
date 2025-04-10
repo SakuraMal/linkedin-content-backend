@@ -730,40 +730,55 @@ class VideoGenerator:
                     # Determine transition style to use
                     if transition_style:
                         try:
-                            transition = media_processor.TRANSITIONS[transition_style]
                             logger.info(f"Segment {i+1}: Using configured transition style: {transition_style}")
                         except KeyError:
                             # Fallback to crossfade if the transition style is not found
                             logger.warning(f"Transition style {transition_style} not found in TRANSITIONS, falling back to CROSSFADE")
                             transition_style = TransitionStyle.CROSSFADE
-                            transition = media_processor.TRANSITIONS[TransitionStyle.CROSSFADE]
                     else:
                         from ...models.video import TransitionStyle
                         selected_style = TransitionStyle.CROSSFADE
-                        transition = media_processor.TRANSITIONS[selected_style]
                         transition_style = selected_style
                         logger.info(f"Segment {i+1}: Dynamically selected transition style: {transition_style}")
                     
-                    # Apply transition effect more explicitly
+                    # Apply transition effect explicitly based on type
                     logger.info(f"Segment {i+1}: Applying {transition_style} transition with duration {transition_duration:.2f}s")
                     try:
-                        # Apply the transition and ensure it takes effect
+                        # Apply the transition directly based on type
                         if transition_style == TransitionStyle.CROSSFADE:
+                            logger.info(f"Applying CROSSFADE transition to segment {i+1}")
                             clip = clip.crossfadein(transition_duration)
                         elif transition_style == TransitionStyle.FADE:
+                            logger.info(f"Applying FADE transition to segment {i+1}")
                             clip = clip.fadein(transition_duration)
                         elif transition_style == TransitionStyle.ZOOM:
-                            # Start at 70% size and zoom to 100%
-                            start_size = 0.7
-                            clip = clip.resize(lambda t: start_size + (1-start_size)*min(1, t/transition_duration))
-                        # Note: Slide transitions need to be handled differently - they're added in the composite step
+                            logger.info(f"Applying ZOOM transition to segment {i+1}")
+                            # Implement a more dramatic zoom effect
+                            clip = clip.resize(lambda t: max(0.6, min(1, 0.6 + 0.4*t/transition_duration)) if t < transition_duration*1.5 else 1)
+                        elif transition_style == TransitionStyle.SLIDE_LEFT:
+                            logger.info(f"Applying SLIDE_LEFT transition to segment {i+1}")
+                            # Move from right to left
+                            clip = clip.set_position(lambda t: ((1-min(1, t/transition_duration))*clip.w, 0) if t < transition_duration*1.5 else (0,0))
+                        elif transition_style == TransitionStyle.SLIDE_RIGHT:
+                            logger.info(f"Applying SLIDE_RIGHT transition to segment {i+1}")
+                            # Move from left to right
+                            clip = clip.set_position(lambda t: ((-min(1, t/transition_duration)*clip.w, 0) if t < transition_duration*1.5 else (0,0)))
+                        else:
+                            # Fallback to crossfade for unknown transition types
+                            logger.warning(f"Unknown transition type {transition_style}, falling back to crossfade")
+                            clip = clip.crossfadein(transition_duration)
                         
                         logger.info(f"Segment {i+1}: Successfully applied {transition_style} transition")
                     except Exception as e:
                         logger.error(f"Error applying transition: {str(e)}")
                         logger.error(traceback.format_exc())
-                        # Fallback to no transition
-                        logger.warning(f"Falling back to no transition due to error")
+                        # Fallback to crossfade on error
+                        logger.warning(f"Falling back to crossfade due to error")
+                        try:
+                            clip = clip.crossfadein(transition_duration)
+                        except:
+                            # If even crossfade fails, continue without transition
+                            logger.error("Even crossfade failed, continuing without transition")
                 
                 video_segments.append(clip)
             
