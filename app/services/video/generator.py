@@ -730,7 +730,22 @@ class VideoGenerator:
                     # Determine transition style to use
                     if transition_style:
                         try:
-                            logger.info(f"Segment {i+1}: Using configured transition style: {transition_style}")
+                            # Make sure we convert string values to enum values if needed
+                            from ...models.video import TransitionStyle
+                            transition_value = transition_style
+                            if isinstance(transition_style, str):
+                                # Try to convert string to enum
+                                try:
+                                    # Check if it's a lowercase string that matches an enum value
+                                    for style in TransitionStyle:
+                                        if transition_style.lower() == style.value:
+                                            transition_value = style
+                                            break
+                                except:
+                                    # If conversion fails, keep the string value
+                                    pass
+                                    
+                            logger.info(f"Segment {i+1}: Using configured transition style: {transition_value}")
                         except KeyError:
                             # Fallback to crossfade if the transition style is not found
                             logger.warning(f"Transition style {transition_style} not found in TRANSITIONS, falling back to CROSSFADE")
@@ -745,30 +760,41 @@ class VideoGenerator:
                     logger.info(f"Segment {i+1}: Applying {transition_style} transition with duration {transition_duration:.2f}s")
                     try:
                         # Apply the transition directly based on type
-                        if transition_style == TransitionStyle.CROSSFADE:
+                        from ...models.video import TransitionStyle
+                        
+                        # Get the string value of the transition for easier comparison
+                        transition_value = transition_style
+                        if hasattr(transition_style, 'value'):
+                            # If it's an enum, get its value
+                            transition_value = transition_style.value
+                        
+                        logger.info(f"Using transition value: {transition_value}")
+                        
+                        # Apply transition based on the string value
+                        if transition_value == TransitionStyle.CROSSFADE.value:
                             logger.info(f"Applying CROSSFADE transition to segment {i+1}")
                             clip = clip.crossfadein(transition_duration)
-                        elif transition_style == TransitionStyle.FADE:
+                        elif transition_value == TransitionStyle.FADE.value:
                             logger.info(f"Applying FADE transition to segment {i+1}")
                             clip = clip.fadein(transition_duration)
-                        elif transition_style == TransitionStyle.ZOOM:
+                        elif transition_value == TransitionStyle.ZOOM.value:
                             logger.info(f"Applying ZOOM transition to segment {i+1}")
                             # Implement a more dramatic zoom effect
                             clip = clip.resize(lambda t: max(0.6, min(1, 0.6 + 0.4*t/transition_duration)) if t < transition_duration*1.5 else 1)
-                        elif transition_style == TransitionStyle.SLIDE_LEFT:
+                        elif transition_value == TransitionStyle.SLIDE_LEFT.value:
                             logger.info(f"Applying SLIDE_LEFT transition to segment {i+1}")
                             # Move from right to left
                             clip = clip.set_position(lambda t: ((1-min(1, t/transition_duration))*clip.w, 0) if t < transition_duration*1.5 else (0,0))
-                        elif transition_style == TransitionStyle.SLIDE_RIGHT:
+                        elif transition_value == TransitionStyle.SLIDE_RIGHT.value:
                             logger.info(f"Applying SLIDE_RIGHT transition to segment {i+1}")
                             # Move from left to right
                             clip = clip.set_position(lambda t: ((-min(1, t/transition_duration)*clip.w, 0) if t < transition_duration*1.5 else (0,0)))
                         else:
                             # Fallback to crossfade for unknown transition types
-                            logger.warning(f"Unknown transition type {transition_style}, falling back to crossfade")
+                            logger.warning(f"Unknown transition value {transition_value}, falling back to crossfade")
                             clip = clip.crossfadein(transition_duration)
                         
-                        logger.info(f"Segment {i+1}: Successfully applied {transition_style} transition")
+                        logger.info(f"Segment {i+1}: Successfully applied {transition_value} transition")
                     except Exception as e:
                         logger.error(f"Error applying transition: {str(e)}")
                         logger.error(traceback.format_exc())
