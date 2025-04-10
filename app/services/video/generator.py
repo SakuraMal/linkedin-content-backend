@@ -634,28 +634,43 @@ class VideoGenerator:
                     # Convert string to TransitionStyle enum if needed
                     from ...models.video import TransitionStyle
                     try:
-                        transition_style_str = video_prefs.transitionStyle.upper()
-                        if hasattr(TransitionStyle, transition_style_str):
-                            transition_style = getattr(TransitionStyle, transition_style_str)
+                        logger.info(f"Attempting to use transition style from videoPreferences: '{video_prefs.transitionStyle}'")
+                        # Handle mapping of frontend style names to backend enum values
+                        frontend_to_backend = {
+                            'crossfade': TransitionStyle.CROSSFADE,
+                            'cinematic': TransitionStyle.FADE,
+                            'dynamic': TransitionStyle.ZOOM
+                        }
+                        
+                        # First try direct mapping from frontend names
+                        if video_prefs.transitionStyle.lower() in frontend_to_backend:
+                            transition_style = frontend_to_backend[video_prefs.transitionStyle.lower()]
+                            logger.info(f"Mapped frontend transition style '{video_prefs.transitionStyle}' to backend enum {transition_style}")
+                        # Then try uppercase enum lookup (for values sent directly as enum names)
+                        elif hasattr(TransitionStyle, video_prefs.transitionStyle.upper()):
+                            transition_style = getattr(TransitionStyle, video_prefs.transitionStyle.upper())
+                            logger.info(f"Used direct enum lookup for transition style '{video_prefs.transitionStyle}'")
                         else:
-                            # Handle common transition styles from frontend
-                            if video_prefs.transitionStyle == 'crossfade':
-                                transition_style = TransitionStyle.CROSSFADE
-                            elif video_prefs.transitionStyle == 'cinematic':
-                                transition_style = TransitionStyle.FADE
-                            elif video_prefs.transitionStyle == 'dynamic':
-                                transition_style = TransitionStyle.ZOOM
+                            # Default to crossfade if no mapping is found
+                            logger.warning(f"No mapping found for transition style '{video_prefs.transitionStyle}', using CROSSFADE")
+                            transition_style = TransitionStyle.CROSSFADE
+                            
                     except Exception as e:
                         logger.warning(f"Failed to convert transition style '{video_prefs.transitionStyle}': {e}")
-                        # Direct fallback to the style from videoPreferences if the conversion fails
+                        # Use a safer direct mapping approach as fallback
                         if video_prefs.transitionStyle == 'crossfade':
                             transition_style = TransitionStyle.CROSSFADE
                         elif video_prefs.transitionStyle == 'cinematic':
                             transition_style = TransitionStyle.FADE
                         elif video_prefs.transitionStyle == 'dynamic':
                             transition_style = TransitionStyle.ZOOM
+                        else:
+                            # Default to crossfade
+                            transition_style = TransitionStyle.CROSSFADE
+                        
+                        logger.info(f"Exception fallback: Used direct mapping for '{video_prefs.transitionStyle}' to {transition_style}")
 
-            logger.info(f"Using transition style: {transition_style}")
+            logger.info(f"Final transition style selected: {transition_style}")
             
             # Calculate total transition time
             total_transition_time = (num_images - 1) * transition_duration
@@ -699,6 +714,7 @@ class VideoGenerator:
             logger.info(f"Total transition time: {total_transition_time:.2f}s")
             logger.info(f"Available image time: {available_image_time:.2f}s")
             logger.info(f"Equal duration per image: {equal_image_duration:.2f}s")
+            logger.info(f"Using transition style: {transition_style}")
             
             for i, segment in enumerate(matched_segments):
                 # Process image with equal duration
@@ -708,10 +724,19 @@ class VideoGenerator:
                 # Apply transition if not the first clip
                 if i > 0:
                     if transition_style:
-                        transition = media_processor.TRANSITIONS[transition_style]
+                        try:
+                            transition = media_processor.TRANSITIONS[transition_style]
+                            logger.info(f"Segment {i+1}: Using configured transition style: {transition_style}")
+                        except KeyError:
+                            # Fallback to crossfade if the transition style is not found
+                            logger.warning(f"Transition style {transition_style} not found in TRANSITIONS, falling back to CROSSFADE")
+                            transition_style = TransitionStyle.CROSSFADE
+                            transition = media_processor.TRANSITIONS[TransitionStyle.CROSSFADE]
                     else:
-                        transition_style = media_processor.select_transition(i, len(matched_segments), request.style)
-                        transition = media_processor.TRANSITIONS[transition_style]
+                        selected_style = media_processor.select_transition(i, len(matched_segments), request.style)
+                        transition = media_processor.TRANSITIONS[selected_style]
+                        transition_style = selected_style
+                        logger.info(f"Segment {i+1}: Dynamically selected transition style: {transition_style}")
                     
                     clip = transition(clip, transition_duration)
                     logger.info(f"Segment {i+1}: Applied {transition_style} transition of {transition_duration:.2f}s")
