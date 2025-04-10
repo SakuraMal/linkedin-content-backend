@@ -682,10 +682,34 @@ class VideoGenerator:
             logger.info(f"Media type: {'Stock' if is_stock_media_direct else 'User/Custom'}")
             self.update_job_status(redis_client, job_id, "media_processed", progress=60)
             
-            # Combine audio and video
+            # Combine audio with video
             self.update_job_status(redis_client, job_id, "combining", progress=70)
             logger.info("Combining audio and video")
-            final_video = media_processor.combine_with_audio(video_segments, media_assets['videos'][0])
+            
+            # Check if there's audio available or if we need to generate it
+            if 'videos' not in media_assets or not media_assets['videos']:
+                # Generate audio narration
+                logger.info("No audio found in media assets, generating audio narration")
+                self.update_job_status(redis_client, job_id, "audio_generating", progress=65)
+                
+                audio_path = audio_generator.generate_audio(processed_text)
+                if audio_path:
+                    logger.info(f"Audio narration generated: {audio_path}")
+                    temp_files.append(audio_path)
+                    media_assets['videos'] = [audio_path]
+                    self.update_job_status(redis_client, job_id, "audio_generated", progress=68)
+                else:
+                    # If audio generation fails, create a silent audio clip
+                    logger.warning("Audio generation failed, using silent audio")
+                    from moviepy.audio.AudioClip import AudioClip
+                    silent_audio = AudioClip(lambda t: 0, duration=request.duration)
+                    final_video = media_processor.combine_with_audio(video_segments, silent_audio)
+                    
+            # Now proceed with the audio we have
+            if 'videos' in media_assets and media_assets['videos']:
+                logger.info(f"Using audio file from media_assets: {media_assets['videos'][0]}")
+                final_video = media_processor.combine_with_audio(video_segments, media_assets['videos'][0])
+            
             logger.info(f"Final video created: {final_video}")
             self.update_job_status(redis_client, job_id, "combined", progress=80)
             
