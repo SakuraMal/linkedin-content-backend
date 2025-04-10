@@ -8,6 +8,7 @@ import traceback
 import json
 import openai
 from .pexels_fetcher import pexels_fetcher
+import random
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
@@ -107,28 +108,32 @@ class MediaFetcher:
             }
 
     def extract_keywords(self, content: str, max_keywords: int = 5) -> Dict[str, List[str]]:
-        """Extract visually descriptive keywords from content, categorized by type."""
+        """Extract highly detailed, visually descriptive keywords from content for better search results."""
         try:
-            prompt = f"""Analyze this content and extract highly specific visual search terms, categorized into two types:
+            # Enhanced prompt with more specific instructions for visual richness
+            prompt = f"""Analyze this content and generate highly detailed, visually descriptive search terms that would yield professional stock photos and videos.
 
-            1. Static subjects (for images):
-               - Concrete objects, scenes, or concepts
-               - Include descriptive adjectives (e.g. 'modern office' instead of just 'office')
-               - Consider metaphorical representations of abstract concepts
-               - Include emotional/mood descriptors when relevant
-            
-            2. Dynamic subjects (for videos):
-               - Actions, processes, or movements
-               - Include context and setting
-               - Consider human interactions or behaviors
-               - Focus on visual aspects that work well in motion
-            
-            Guidelines:
-            - Be very specific (e.g. 'business team brainstorming' vs just 'team')
-            - Include visual style hints (e.g. 'minimalist', 'vibrant', 'professional')
-            - Consider the content's tone and industry context
-            - Combine concepts for more specific results
-            
+            1. For static visuals (images):
+               - Create sophisticated multi-part descriptions with 4-6 words each
+               - Include specific settings (e.g., "modern glass office with city view" vs just "office")
+               - Specify demographics if relevant (e.g., "diverse team of professionals" vs just "team")
+               - Add emotional tone (e.g., "confident executive presenting strategy")
+               - Include specific lighting/style (e.g., "bright naturally lit workspace")
+               - Consider both literal and metaphorical representations
+
+            2. For dynamic visuals (videos):
+               - Focus on actions and movements that work well in motion
+               - Include specific setting and context details
+               - Describe interactions between people or objects
+               - Specify camera angles or movements if relevant (e.g., "aerial view of team collaboration")
+               - Include tempo descriptions (e.g., "time-lapse of busy office workflow")
+
+            Professional context guidelines:
+            - Use business/professional terminology appropriate to the content
+            - Prioritize sophisticated, premium-looking imagery descriptions
+            - For abstract concepts, create concrete visual representations
+            - Consider the industry, setting, and tone of the content
+
             Return only a JSON object with:
             - static_keywords: list of detailed image search terms (max {max_keywords//2 + 1})
             - dynamic_keywords: list of detailed video search terms (max {max_keywords//2})
@@ -136,19 +141,25 @@ class MediaFetcher:
             Content: {content}"""
             
             response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",  # Using GPT-3.5-turbo for cost efficiency while maintaining good results
+                model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=200
+                max_tokens=300  # Increased to allow for more detailed descriptions
             )
             
             keywords = json.loads(response.choices[0].message.content)
-            logger.info(f"Extracted detailed keywords by type: {keywords}")
+            
+            # Log the enhanced keywords
+            logger.info(f"Enhanced visual search terms generated:")
+            for category, terms in keywords.items():
+                for term in terms:
+                    logger.info(f"  - {category}: {term}")
+            
             return keywords
             
         except Exception as e:
-            logger.error(f"Error extracting keywords: {str(e)}\n{traceback.format_exc()}")
-            # Fallback to simple content splitting
+            logger.error(f"Error extracting enhanced keywords: {str(e)}\n{traceback.format_exc()}")
+            # Fallback to simple content splitting as before
             words = content.split()[:max_keywords]
             return {
                 "static_keywords": words[:3],
@@ -237,7 +248,7 @@ class MediaFetcher:
 
     def fetch_media(self, content: str, duration: float = 15.0) -> Dict[str, List[str]]:
         """
-        Fetch media assets for video generation with smart content mixing.
+        Fetch media assets for video generation with smart content analysis.
         
         Args:
             content: Text content to generate media for
@@ -247,7 +258,7 @@ class MediaFetcher:
             Dictionary containing lists of image and video file paths
         """
         try:
-            # Analyze content to determine optimal media distribution
+            # Step 1: Analyze content to determine optimal media distribution
             distribution = self.analyze_content_type(content)
             image_ratio = distribution["image_ratio"]
             video_ratio = distribution["video_ratio"]
@@ -260,18 +271,68 @@ class MediaFetcher:
             logger.info(f"Content-based distribution - Images: {num_images} ({image_ratio:.1%}), Videos: {num_videos} ({video_ratio:.1%})")
             logger.info(f"Distribution reasoning: {distribution.get('reasoning', 'Not provided')}")
             
-            # Extract keywords categorized by type
+            # Step 2: Extract highly detailed and visually descriptive keywords
             keywords = self.extract_keywords(content)
             if not keywords:
                 logger.error("No keywords extracted from content")
                 return {'images': [], 'videos': []}
             
-            # Fetch images using static keywords
+            # Step 3: Perform contextual theme analysis for consistent visual style
+            try:
+                theme_prompt = f"""Analyze this professional content and identify:
+                1. The overall visual tone/mood (e.g., "professional and bright", "sophisticated and muted")
+                2. Setting context (e.g., "modern tech office", "outdoor business setting")
+                3. Industry context (e.g., "healthcare", "finance", "technology")
+                
+                Return only a JSON object with these three fields, keeping values brief but descriptive.
+                
+                Content: {content}"""
+                
+                theme_response = self.openai_client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": theme_prompt}],
+                    temperature=0.5,
+                    max_tokens=150
+                )
+                
+                theme_context = json.loads(theme_response.choices[0].message.content)
+                logger.info(f"Visual context analysis: {theme_context}")
+                
+                # Add theme context to enhance search terms
+                enhanced_static_keywords = []
+                for keyword in keywords["static_keywords"]:
+                    # For about 50% of keywords, add thematic context
+                    if random.random() > 0.5 and "tone" in theme_context:
+                        enhanced_keyword = f"{keyword}, {theme_context['tone']}"
+                        enhanced_static_keywords.append(enhanced_keyword)
+                    else:
+                        enhanced_static_keywords.append(keyword)
+                
+                enhanced_dynamic_keywords = []
+                for keyword in keywords["dynamic_keywords"]:
+                    # For about 50% of keywords, add setting context
+                    if random.random() > 0.5 and "setting" in theme_context:
+                        enhanced_keyword = f"{keyword} in {theme_context['setting']}"
+                        enhanced_dynamic_keywords.append(enhanced_keyword)
+                    else:
+                        enhanced_dynamic_keywords.append(keyword)
+                
+                # Replace original keywords with enhanced ones
+                keywords["static_keywords"] = enhanced_static_keywords
+                keywords["dynamic_keywords"] = enhanced_dynamic_keywords
+                
+                logger.info("Enhanced search terms with thematic context")
+            except Exception as e:
+                logger.warning(f"Could not perform theme analysis: {str(e)}")
+                # Continue with original keywords
+            
+            # Step 4: Fetch images with enhanced search terms
             image_paths = []
             for keyword in keywords["static_keywords"]:
                 if len(image_paths) >= num_images:
                     break
                     
+                logger.info(f"Searching for images with enhanced term: '{keyword}'")
                 urls = self.fetch_unsplash_images(keyword, count=2)
                 for url in urls:
                     if len(image_paths) >= num_images:
@@ -281,13 +342,13 @@ class MediaFetcher:
                     if image_path:
                         image_paths.append(image_path)
             
-            # Fetch videos using dynamic keywords
+            # Step 5: Fetch videos with enhanced search terms
             video_paths = pexels_fetcher.fetch_relevant_videos(
                 keywords["dynamic_keywords"], 
                 count=num_videos
             )
             
-            logger.info(f"Successfully fetched {len(image_paths)} images and {len(video_paths)} videos")
+            logger.info(f"Successfully fetched {len(image_paths)} images and {len(video_paths)} videos with enhanced contextual search")
             return {
                 'images': image_paths,
                 'videos': video_paths
@@ -295,6 +356,7 @@ class MediaFetcher:
             
         except Exception as e:
             logger.error(f"Error fetching media: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return {'images': [], 'videos': []}
 
     def cleanup(self):
