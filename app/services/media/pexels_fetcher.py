@@ -20,8 +20,36 @@ class PexelsFetcher:
             logger.error("PEXELS_API_KEY not found in environment variables")
             raise ValueError("PEXELS_API_KEY environment variable is required")
         
-        self.temp_dir = tempfile.mkdtemp(prefix='pexels_')
-        logger.info("Initialized PexelsFetcher")
+        # Create a temporary directory for video downloads
+        try:
+            # First try using tempfile
+            self.temp_dir = tempfile.mkdtemp(prefix='pexels_')
+            # Test if directory is writable
+            test_file = os.path.join(self.temp_dir, 'test.txt')
+            with open(test_file, 'w') as f:
+                f.write('test')
+            os.remove(test_file)
+            logger.debug(f"Temp directory {self.temp_dir} is writable")
+        except Exception as e:
+            logger.warning(f"Could not create temp directory with tempfile: {str(e)}")
+            try:
+                # If tempfile fails, try using /tmp directly
+                self.temp_dir = os.path.join('/tmp', f'pexels_{os.getpid()}')
+                os.makedirs(self.temp_dir, exist_ok=True)
+                # Test if directory is writable
+                test_file = os.path.join(self.temp_dir, 'test.txt')
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                os.remove(test_file)
+                logger.debug(f"Created alternate temp directory: {self.temp_dir}")
+            except Exception as e2:
+                logger.warning(f"Could not create temp directory in /tmp: {str(e2)}")
+                # Last resort, use a local directory
+                self.temp_dir = os.path.join(os.getcwd(), 'tmp_pexels')
+                os.makedirs(self.temp_dir, exist_ok=True)
+                logger.debug(f"Created fallback temp directory: {self.temp_dir}")
+                
+        logger.info(f"Initialized PexelsFetcher with temp directory: {self.temp_dir}")
 
     def search_videos(self, query: str, min_duration: int = MIN_DURATION, 
                      max_duration: int = MAX_DURATION, per_page: int = 5) -> List[Dict]:
@@ -108,6 +136,14 @@ class PexelsFetcher:
             # Extract filename from URL or generate one
             url_path = urlparse(video_url).path
             filename = os.path.basename(url_path) or f"pexels_video_{hash(video_url)}.mp4"
+            
+            # Ensure temp directory exists
+            if not os.path.exists(self.temp_dir):
+                # If initial temp_dir doesn't exist, create a new one
+                self.temp_dir = os.path.join('/tmp', f'pexels_{os.getpid()}')
+                os.makedirs(self.temp_dir, exist_ok=True)
+                logger.info(f"Created new temp directory: {self.temp_dir}")
+            
             local_path = os.path.join(self.temp_dir, filename)
             
             # Download the file in chunks
