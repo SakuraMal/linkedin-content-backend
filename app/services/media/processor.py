@@ -507,8 +507,8 @@ class MediaProcessor:
             logger.error(f"Error in cleanup: {str(e)}")
             logger.error(traceback.format_exc())
 
-# Create a singleton instance with square aspect ratio and longer transition duration
+# Create a singleton instance with landscape aspect ratio and longer transition duration
 media_processor = MediaProcessor(
-    aspect_ratio='square',
+    aspect_ratio='landscape',  # Use string format for aspect ratio
     transition_duration=0.8  # Increased from 0.5 to make transitions more visible
 ) 
