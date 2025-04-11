@@ -58,23 +58,20 @@ class MediaProcessor:
         """
         # Create a base temp directory if it doesn't exist
         base_temp_dir = '/tmp/processed_media'
-        if not os.path.exists(base_temp_dir):
-            try:
-                os.makedirs(base_temp_dir, mode=0o777, exist_ok=True)
-                logger.info(f"Created base temporary directory: {base_temp_dir}")
-            except Exception as e:
-                logger.error(f"Failed to create base temporary directory: {str(e)}")
-                raise
-
-        # Create a unique subdirectory for this processor instance
-        self.temp_dir = tempfile.mkdtemp(prefix='processed_', dir=base_temp_dir)
-        
-        # Ensure the directory has proper permissions
         try:
+            # Ensure base directory exists and has proper permissions
+            os.makedirs(base_temp_dir, mode=0o777, exist_ok=True)
+            os.chmod(base_temp_dir, 0o777)
+            logger.info(f"Ensured base temporary directory exists: {base_temp_dir}")
+            
+            # Create a unique subdirectory for this processor instance
+            self.temp_dir = tempfile.mkdtemp(prefix='processed_', dir=base_temp_dir)
+            
+            # Ensure the subdirectory has proper permissions
             os.chmod(self.temp_dir, 0o777)
-            logger.info(f"Set permissions on temporary directory: {self.temp_dir}")
+            logger.info(f"Created and set permissions on temporary directory: {self.temp_dir}")
         except Exception as e:
-            logger.error(f"Failed to set permissions on temporary directory: {str(e)}")
+            logger.error(f"Failed to initialize temporary directories: {str(e)}")
             raise
 
         self.target_resolution = self.RESOLUTIONS[aspect_ratio]
