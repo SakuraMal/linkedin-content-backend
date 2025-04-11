@@ -13,6 +13,7 @@ import math
 from ...models.video import VideoStyle, TransitionStyle
 import traceback
 import psutil
+import shutil
 
 # Prevent truncated images
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -55,11 +56,32 @@ class MediaProcessor:
                         as it's the most commonly used format on LinkedIn.
             transition_duration: Default duration of transition effects in seconds.
         """
-        self.temp_dir = tempfile.mkdtemp(prefix='processed_')
+        # Create a base temp directory if it doesn't exist
+        base_temp_dir = '/tmp/processed_media'
+        if not os.path.exists(base_temp_dir):
+            try:
+                os.makedirs(base_temp_dir, mode=0o777, exist_ok=True)
+                logger.info(f"Created base temporary directory: {base_temp_dir}")
+            except Exception as e:
+                logger.error(f"Failed to create base temporary directory: {str(e)}")
+                raise
+
+        # Create a unique subdirectory for this processor instance
+        self.temp_dir = tempfile.mkdtemp(prefix='processed_', dir=base_temp_dir)
+        
+        # Ensure the directory has proper permissions
+        try:
+            os.chmod(self.temp_dir, 0o777)
+            logger.info(f"Set permissions on temporary directory: {self.temp_dir}")
+        except Exception as e:
+            logger.error(f"Failed to set permissions on temporary directory: {str(e)}")
+            raise
+
         self.target_resolution = self.RESOLUTIONS[aspect_ratio]
         self.transition_duration = transition_duration
         logger.info(f"Initialized MediaProcessor with resolution: {self.target_resolution}, "
-                   f"default transition duration: {transition_duration}s")
+                   f"default transition duration: {transition_duration}s, "
+                   f"temp directory: {self.temp_dir}")
 
     def select_transition(self, 
                         index: int, 
@@ -340,81 +362,108 @@ class MediaProcessor:
             logger.error(f"Error creating video segments: {str(e)}")
             raise
 
-    def combine_with_audio(self, video_clips: List[Union[ImageClip, VideoFileClip]], audio_path: str) -> Optional[str]:
+    def combine_with_audio(self, video_clips: List[VideoFileClip], audio_clip: AudioFileClip, output_path: str) -> None:
         """
-        Combine video clips with audio, ensuring proper synchronization and equal display times.
+        Combine video clips with audio and add transitions.
         
         Args:
             video_clips: List of video clips to combine
-            audio_path: Path to the audio file or AudioClip object
-            
-        Returns:
-            Optional[str]: Path to the final video file if successful, None otherwise
+            audio_clip: Audio clip to add to the video
+            output_path: Path where the final video should be saved
         """
         try:
-            # Process audio
-            try:
-                if isinstance(audio_path, str):
-                    audio_clip = self.process_audio(audio_path)
-                else:
-                    audio_clip = audio_path  # It's already an AudioClip object
-                total_audio_duration = audio_clip.duration
-                logger.info(f"Successfully processed audio with duration: {total_audio_duration}s")
-            except Exception as audio_error:
-                logger.error(f"Error processing audio file: {str(audio_error)}")
-                logger.warning("Creating silent audio as fallback")
-                # Create silent audio as fallback
-                # First get the total duration of all clips
-                total_video_duration = sum(clip.duration for clip in video_clips)
-                audio_clip = AudioClip(lambda t: 0, duration=total_video_duration)
-                total_audio_duration = total_video_duration
-                logger.info(f"Created silent audio fallback with duration: {total_audio_duration}s")
+            # Log memory usage before processing
+            process = psutil.Process()
+            initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+            logger.info(f"Starting video combination. Initial memory usage: {initial_memory:.2f} MB")
             
-            logger.info(f"Combining {len(video_clips)} video clips with audio (total duration: {total_audio_duration}s)")
+            # Log video clip details
+            for i, clip in enumerate(video_clips):
+                logger.info(f"Video clip {i+1}/{len(video_clips)}: "
+                          f"Duration: {clip.duration:.2f}s, "
+                          f"Size: {clip.w}x{clip.h}, "
+                          f"FPS: {clip.fps}")
             
-            # IMPORTANT: Use method="compose" to preserve transitions between clips
-            final_video = concatenate_videoclips(video_clips, method="compose")
-            logger.info(f"Final video duration after concatenation: {final_video.duration}s")
+            # Log audio details
+            logger.info(f"Audio clip: Duration: {audio_clip.duration:.2f}s, "
+                      f"FPS: {audio_clip.fps}")
+            
+            # Apply transitions between clips
+            final_clips = []
+            for i, clip in enumerate(video_clips):
+                if i > 0:  # Add transition to all clips except the first
+                    transition = self.select_transition(i, len(video_clips), VideoStyle.DYNAMIC)
+                    clip = self.TRANSITIONS[transition](clip, self.transition_duration)
+                final_clips.append(clip)
+            
+            # Combine all clips
+            final_video = concatenate_videoclips(final_clips)
+            
+            # Log memory usage after combining clips
+            memory_after_combine = process.memory_info().rss / 1024 / 1024  # MB
+            logger.info(f"Memory usage after combining clips: {memory_after_combine:.2f} MB")
             
             # Set audio
             final_video = final_video.set_audio(audio_clip)
             
-            # Generate output path
-            output_path = os.path.join(self.temp_dir, "final_video.mp4")
-            
-            # Write video with high quality settings
-            logger.info(f"Writing final video to {output_path} with fps=30, bitrate=8000k")
+            # Write the final video
+            logger.info(f"Writing final video to: {output_path}")
             final_video.write_videofile(
                 output_path,
                 codec='libx264',
                 audio_codec='aac',
+                temp_audiofile=os.path.join(self.temp_dir, 'temp-audio.m4a'),
+                remove_temp=True,
                 fps=30,
-                preset='medium',
-                bitrate='8000k',
-                audio_bitrate='192k',
                 threads=4,
-                logger=None
+                preset='medium',
+                bitrate='5000k'
             )
+            
+            # Log memory usage after writing
+            final_memory = process.memory_info().rss / 1024 / 1024  # MB
+            logger.info(f"Final memory usage: {final_memory:.2f} MB")
             
             # Clean up
             final_video.close()
+            for clip in video_clips:
+                clip.close()
             audio_clip.close()
             
-            logger.info(f"Successfully created video with synchronized audio: {output_path}")
-            return output_path
+            logger.info(f"Successfully created video at: {output_path}")
             
         except Exception as e:
             logger.error(f"Error combining video with audio: {str(e)}")
-            return None
+            logger.error(f"Stack trace: {traceback.format_exc()}")
+            raise
 
     def cleanup(self):
-        """Remove all temporary files."""
+        """
+        Clean up temporary files and directories.
+        """
         try:
-            import shutil
-            shutil.rmtree(self.temp_dir)
-            logger.info(f"Cleaned up temporary directory: {self.temp_dir}")
+            if hasattr(self, 'temp_dir') and self.temp_dir and os.path.exists(self.temp_dir):
+                # Remove all files in the temp directory
+                for filename in os.listdir(self.temp_dir):
+                    file_path = os.path.join(self.temp_dir, filename)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.unlink(file_path)
+                        elif os.path.isdir(file_path):
+                            shutil.rmtree(file_path)
+                    except Exception as e:
+                        logger.error(f"Error removing {file_path}: {str(e)}")
+                
+                # Remove the temp directory itself
+                try:
+                    os.rmdir(self.temp_dir)
+                    logger.info(f"Successfully cleaned up temporary directory: {self.temp_dir}")
+                except Exception as e:
+                    logger.error(f"Error removing temp directory {self.temp_dir}: {str(e)}")
+                    
         except Exception as e:
-            logger.error(f"Error cleaning up temporary files: {str(e)}")
+            logger.error(f"Error in cleanup: {str(e)}")
+            logger.error(traceback.format_exc())
 
 # Create a singleton instance with square aspect ratio and longer transition duration
 media_processor = MediaProcessor(
