@@ -120,6 +120,17 @@ class MediaProcessor:
                 transitions = [t for t in available_transitions if t != TransitionStyle.FADE]
                 return transitions[index % len(transitions)]
 
+    def _ensure_processed_images_dir(self) -> str:
+        """Ensure the processed images directory exists and return its path."""
+        processed_images_dir = os.path.join(self.temp_dir, 'processed_images')
+        try:
+            os.makedirs(processed_images_dir, exist_ok=True)
+            os.chmod(processed_images_dir, 0o777)
+            return processed_images_dir
+        except Exception as e:
+            logger.error(f"Error creating processed images directory: {str(e)}")
+            raise
+
     def process_image(self, image_path: str, duration: float) -> ImageClip:
         """
         Process an image for video creation.
@@ -136,6 +147,13 @@ class MediaProcessor:
             ImageClip: Processed image clip ready for video
         """
         try:
+            # Ensure the processed images directory exists
+            processed_images_dir = self._ensure_processed_images_dir()
+            
+            # Generate a unique filename for the processed image
+            filename = f"processed_{os.path.basename(image_path)}"
+            output_path = os.path.join(processed_images_dir, filename)
+            
             # Open and process image with PIL
             with Image.open(image_path) as img:
                 # Convert to RGB if necessary
@@ -165,11 +183,10 @@ class MediaProcessor:
                 final_img.paste(img, (paste_x, paste_y))
                 
                 # Save processed image
-                processed_path = os.path.join(self.temp_dir, f"processed_{os.path.basename(image_path)}")
-                final_img.save(processed_path, quality=95)
+                final_img.save(output_path, quality=95)
                 
                 # Create video clip
-                clip = ImageClip(processed_path).set_duration(duration)
+                clip = ImageClip(output_path).set_duration(duration)
                 logger.info(f"Successfully processed image: {image_path}")
                 return clip
                 
