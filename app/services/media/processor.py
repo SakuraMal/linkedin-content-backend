@@ -346,7 +346,7 @@ class MediaProcessor:
         
         Args:
             video_clips: List of video clips to combine
-            audio_path: Path to the audio file
+            audio_path: Path to the audio file or AudioClip object
             
         Returns:
             Optional[str]: Path to the final video file if successful, None otherwise
@@ -354,7 +354,10 @@ class MediaProcessor:
         try:
             # Process audio
             try:
-                audio_clip = self.process_audio(audio_path)
+                if isinstance(audio_path, str):
+                    audio_clip = self.process_audio(audio_path)
+                else:
+                    audio_clip = audio_path  # It's already an AudioClip object
                 total_audio_duration = audio_clip.duration
                 logger.info(f"Successfully processed audio with duration: {total_audio_duration}s")
             except Exception as audio_error:
@@ -402,7 +405,6 @@ class MediaProcessor:
             
         except Exception as e:
             logger.error(f"Error combining video with audio: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
 
     def cleanup(self):
