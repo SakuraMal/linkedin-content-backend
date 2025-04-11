@@ -812,7 +812,47 @@ class VideoGenerator:
             # Now proceed with the audio we have
             if 'videos' in media_assets and media_assets['videos']:
                 logger.info(f"Using audio file from media_assets: {media_assets['videos'][0]}")
-                final_video = media_processor.combine_with_audio(video_segments, media_assets['videos'][0])
+                try:
+                    final_video = media_processor.combine_with_audio(video_segments, media_assets['videos'][0])
+                    if not final_video:
+                        raise Exception("No video returned from combine_with_audio")
+                except Exception as e:
+                    logger.error(f"Error combining audio and video: {str(e)}")
+                    logger.info("Falling back to silent audio as a last resort")
+                    try:
+                        # Create silent audio with the correct duration
+                        from moviepy.audio.AudioClip import AudioClip
+                        total_duration = sum([clip.duration for clip in video_segments])
+                        silent_audio_path = os.path.join(tempfile.gettempdir(), f"silent_audio_{job_id}.wav")
+                        silent_clip = AudioClip(lambda t: 0, duration=total_duration)
+                        silent_clip.write_audiofile(silent_audio_path, fps=44100, nbytes=2, buffersize=2000)
+                        logger.info(f"Created silent audio fallback file: {silent_audio_path}")
+                        
+                        # Try again with the silent audio file
+                        final_video = media_processor.combine_with_audio(video_segments, silent_audio_path)
+                        temp_files.append(silent_audio_path)
+                    except Exception as silent_error:
+                        logger.error(f"Silent audio fallback also failed: {str(silent_error)}")
+                        # Last resort - just concatenate the video clips without audio
+                        try:
+                            from moviepy.editor import concatenate_videoclips
+                            output_path = os.path.join(tempfile.gettempdir(), f"final_video_{job_id}.mp4")
+                            final_clip = concatenate_videoclips(video_segments, method="compose")
+                            final_clip.write_videofile(
+                                output_path,
+                                codec='libx264',
+                                fps=30,
+                                preset='medium',
+                                bitrate='8000k',
+                                audio=False,
+                                threads=4,
+                                logger=None
+                            )
+                            final_video = output_path
+                            logger.info(f"Created video without audio as final fallback: {final_video}")
+                        except Exception as final_error:
+                            logger.error(f"Final fallback also failed: {str(final_error)}")
+                            final_video = None
             
             logger.info(f"Final video created: {final_video}")
             self.update_job_status(redis_client, job_id, "combined", progress=80)

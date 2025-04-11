@@ -5,7 +5,7 @@ from PIL import Image, ImageFile
 from PIL.Image import Resampling
 from moviepy.editor import (
     ImageClip, AudioFileClip, concatenate_videoclips,
-    CompositeVideoClip, vfx, VideoFileClip, ColorClip
+    CompositeVideoClip, vfx, VideoFileClip, ColorClip, AudioClip
 )
 import tempfile
 import numpy as np
@@ -197,7 +197,8 @@ class MediaProcessor:
             
             # Load video - handle errors better
             try:
-                clip = VideoFileClip(video_path)
+                # Explicitly disable audio loading since we'll be using TTS audio
+                clip = VideoFileClip(video_path, audio=False)
                 logger.info(f"Successfully loaded video: {video_path}, original duration: {clip.duration}s, dimensions: {clip.w}x{clip.h}")
             except Exception as e:
                 logger.error(f"Error loading video file {video_path}: {str(e)}")
@@ -352,8 +353,19 @@ class MediaProcessor:
         """
         try:
             # Process audio
-            audio_clip = self.process_audio(audio_path)
-            total_audio_duration = audio_clip.duration
+            try:
+                audio_clip = self.process_audio(audio_path)
+                total_audio_duration = audio_clip.duration
+                logger.info(f"Successfully processed audio with duration: {total_audio_duration}s")
+            except Exception as audio_error:
+                logger.error(f"Error processing audio file: {str(audio_error)}")
+                logger.warning("Creating silent audio as fallback")
+                # Create silent audio as fallback
+                # First get the total duration of all clips
+                total_video_duration = sum(clip.duration for clip in video_clips)
+                audio_clip = AudioClip(lambda t: 0, duration=total_video_duration)
+                total_audio_duration = total_video_duration
+                logger.info(f"Created silent audio fallback with duration: {total_audio_duration}s")
             
             logger.info(f"Combining {len(video_clips)} video clips with audio (total duration: {total_audio_duration}s)")
             
