@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from redis import Redis
 from ..media.fetcher import media_fetcher
-from ..media.processor import media_processor
+from ..media.processor import media_processor, MediaProcessor
 from ..media.audio import audio_generator
 from ..media.text_processor import text_processor
 from .storage import storage_service
@@ -220,8 +220,28 @@ class VideoGenerator:
             # Monitor memory usage before fetching images
             logger.info(f"Memory before fetching images: {process.memory_info().rss / 1024 / 1024:.2f} MB")
 
+            # Debug: Force AI path for testing
+            force_ai_path = os.getenv('FORCE_AI_PATH', 'false').lower() == 'true'
+            if force_ai_path:
+                logger.info("DEBUG: Forcing AI path for testing")
+                is_stock_media_direct = False
+            else:
+                # Check if we have direct stock media URLs
+                is_stock_media_direct = (
+                    request.stockMediaUrls is not None and 
+                    len(request.stockMediaUrls) > 0 and 
+                    all(url.endswith('.mp4') for url in request.stockMediaUrls)
+                )
+            
+            logger.info(f"Using {'stock media' if is_stock_media_direct else 'AI'} path")
+            
+            # Initialize media processor with proper settings
+            media_processor = MediaProcessor(
+                aspect_ratio=request.aspect_ratio if request.aspect_ratio else "16:9",
+                transition_duration=request.videoPreferences.transitionDuration if request.videoPreferences else 0.5
+            )
+            
             # Check if this is a direct stock media request (new approach)
-            is_stock_media_direct = False
             stock_image_urls = []
             
             # Try to extract stockImageUrls from model_extra or request.__dict__
