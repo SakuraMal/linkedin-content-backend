@@ -808,6 +808,101 @@ class VideoGenerator:
                     from moviepy.audio.AudioClip import AudioClip
                     silent_audio = AudioClip(lambda t: 0, duration=request.duration)
                     final_video = media_processor.combine_with_audio(video_segments, silent_audio)
+            # Check if this is an AI-generated video request (text-to-video)
+            elif hasattr(request, 'mediaType') and getattr(request, 'mediaType') == 'ai':
+                # For AI-generated videos, we want TTS audio even if we have Pexels videos
+                logger.info("AI-generated video detected - generating TTS audio even though video assets exist")
+                self.update_job_status(redis_client, job_id, "audio_generating", progress=65)
+                
+                # Save existing videos as a separate asset
+                pexels_videos = media_assets['videos'].copy()
+                
+                # Calculate target duration for TTS
+                target_duration = request.duration * 0.9  # Use 90% of video duration for narration
+                
+                # Check if we need to summarize the text to fit the video duration
+                words = processed_text.split()
+                estimated_audio_duration = len(words) / 2.5  # Estimate 2.5 words per second
+                
+                logger.info(f"Estimated audio duration: {estimated_audio_duration:.2f}s, Target: {target_duration:.2f}s")
+                
+                if estimated_audio_duration > target_duration + 0.5:
+                    logger.info(f"Text is too long for target duration, generating summary")
+                    # Reuse the same summarization logic as above
+                    try:
+                        # Try up to 3 iterations of progressively shorter text
+                        max_attempts = 3
+                        current_attempt = 1
+                        summarized_text = processed_text
+                        
+                        while current_attempt <= max_attempts and estimated_audio_duration > target_duration + 0.5:
+                            # Apply the same summarization logic
+                            scaling_factor = 1.0 + (0.3 * current_attempt)
+                            current_target = target_duration / scaling_factor
+                            
+                            conciseness_levels = ["concise", "very concise", "extremely concise"]
+                            word_descriptors = ["shorter", "much shorter", "drastically shorter"]
+                            conciseness = conciseness_levels[min(current_attempt - 1, 2)]
+                            descriptor = word_descriptors[min(current_attempt - 1, 2)]
+                            
+                            logger.info(f"Using {conciseness} level for iteration {current_attempt}")
+                            
+                            response = self.openai_client.chat.completions.create(
+                                model="gpt-3.5-turbo",
+                                messages=[
+                                    {
+                                        "role": "system",
+                                        "content": f"""You are a professional content editor. Create a {conciseness} version of the following text that will take EXACTLY {current_target:.1f} seconds to speak naturally.
+                                        
+                                        Rules:
+                                        1. The final text MUST be spoken in {current_target:.1f} seconds - this is CRITICAL
+                                        2. Make the content {descriptor} while preserving core message
+                                        3. Use shorter words and simpler sentences
+                                        4. Remove all optional content, examples, and elaborations
+                                        5. Focus on the most essential points
+                                        6. Target approximately {int(current_target * 2.5)} words total
+                                        
+                                        The length of your response is the HIGHEST priority - it MUST be spoken in {current_target:.1f} seconds or less.
+                                        """
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": processed_text
+                                    }
+                                ],
+                                temperature=0.7,
+                                max_tokens=500
+                            )
+                            
+                            summarized_text = response.choices[0].message.content.strip()
+                            if summarized_text and len(summarized_text) < len(processed_text):
+                                logger.info(f"Generated shorter text: Original {len(processed_text)} chars -> New {len(summarized_text)} chars")
+                                words = summarized_text.split()
+                                estimated_audio_duration = len(words) / 2.5
+                                logger.info(f"New estimated audio duration: {estimated_audio_duration:.2f}s, Target: {target_duration:.2f}s")
+                                processed_text = summarized_text
+                            else:
+                                logger.warning(f"Failed to generate shorter text or result wasn't shorter (attempt {current_attempt})")
+                                break
+                                
+                            current_attempt += 1
+                            
+                    except Exception as e:
+                        logger.error(f"Error generating summary: {str(e)}")
+                        logger.error(f"Using original text for audio generation")
+                
+                # Generate TTS audio
+                audio_path = audio_generator.generate_audio(processed_text)
+                if audio_path:
+                    logger.info(f"TTS audio narration generated for AI video: {audio_path}")
+                    temp_files.append(audio_path)
+                    # Replace the Pexels video with TTS audio in the media assets
+                    media_assets['videos'] = [audio_path]
+                    self.update_job_status(redis_client, job_id, "audio_generated", progress=68)
+                else:
+                    # If TTS generation fails, revert to using the original videos
+                    logger.warning("TTS audio generation failed, falling back to original videos")
+                    # Keep the original videos in media_assets['videos']
                     
             # Now proceed with the audio we have
             if 'videos' in media_assets and media_assets['videos']:

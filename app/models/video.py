@@ -69,6 +69,8 @@ class VideoRequest(BaseModel):
     stockImageUrls: Optional[Dict[str, str]] = Field(default=None, description="Alternative name for stockMediaUrls")
     # Add videoPreferences field that will contain caption preferences
     videoPreferences: Optional[VideoPreferences] = Field(default=None, description="Video styling and caption preferences")
+    # Media type to differentiate between AI-generated, custom uploaded, or stock media videos
+    mediaType: Optional[str] = Field(default=None, description="Type of media content: 'ai', 'custom', or 'stock'")
     
     class Config:
         # Allow unknown fields to handle different frontend formats
