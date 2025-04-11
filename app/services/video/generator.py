@@ -237,7 +237,7 @@ class VideoGenerator:
             
             # Initialize media processor with proper settings
             media_processor = MediaProcessor(
-                aspect_ratio="16:9",  # Use default aspect ratio
+                aspect_ratio={"width": 16, "height": 9},  # Use dictionary format for aspect ratio
                 transition_duration=request.videoPreferences.transitionDuration if request.videoPreferences else 0.5
             )
             
