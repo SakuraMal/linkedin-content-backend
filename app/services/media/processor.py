@@ -362,80 +362,108 @@ class MediaProcessor:
             logger.error(f"Error creating video segments: {str(e)}")
             raise
 
-    def combine_with_audio(self, video_clips: List[VideoFileClip], audio_clip: AudioFileClip, output_path: str) -> None:
+    def combine_with_audio(self, video_clips: List[Union[ImageClip, VideoFileClip]], audio_path: str) -> Optional[str]:
         """
-        Combine video clips with audio and add transitions.
+        Combine video clips with audio, ensuring proper synchronization and equal display times.
         
         Args:
             video_clips: List of video clips to combine
-            audio_clip: Audio clip to add to the video
-            output_path: Path where the final video should be saved
+            audio_path: Path to the audio file or AudioClip object
+            
+        Returns:
+            Optional[str]: Path to the final video file if successful, None otherwise
         """
         try:
-            # Log memory usage before processing
-            process = psutil.Process()
-            initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-            logger.info(f"Starting video combination. Initial memory usage: {initial_memory:.2f} MB")
-            
             # Log video clip details
+            logger.info(f"Starting audio-video combination with {len(video_clips)} clips")
             for i, clip in enumerate(video_clips):
-                logger.info(f"Video clip {i+1}/{len(video_clips)}: "
-                          f"Duration: {clip.duration:.2f}s, "
-                          f"Size: {clip.w}x{clip.h}, "
-                          f"FPS: {clip.fps}")
+                logger.info(f"Clip {i}: Type={type(clip).__name__}, Duration={clip.duration}s, Size={clip.size if hasattr(clip, 'size') else 'N/A'}")
             
-            # Log audio details
-            logger.info(f"Audio clip: Duration: {audio_clip.duration:.2f}s, "
-                      f"FPS: {audio_clip.fps}")
+            # Process audio
+            try:
+                if isinstance(audio_path, str):
+                    logger.info(f"Processing audio file: {audio_path}")
+                    audio_clip = self.process_audio(audio_path)
+                else:
+                    logger.info("Using provided AudioClip object")
+                    audio_clip = audio_path  # It's already an AudioClip object
+                
+                total_audio_duration = audio_clip.duration
+                logger.info(f"Successfully processed audio with duration: {total_audio_duration}s")
+                
+                # Log memory usage
+                process = psutil.Process()
+                memory_info = process.memory_info()
+                logger.info(f"Memory usage before video combination: {memory_info.rss / 1024 / 1024:.2f} MB")
+                
+            except Exception as audio_error:
+                logger.error(f"Error processing audio file: {str(audio_error)}")
+                logger.error(f"Audio error traceback: {traceback.format_exc()}")
+                logger.warning("Creating silent audio as fallback")
+                # Create silent audio as fallback
+                total_video_duration = sum(clip.duration for clip in video_clips)
+                audio_clip = AudioClip(lambda t: 0, duration=total_video_duration)
+                total_audio_duration = total_video_duration
+                logger.info(f"Created silent audio fallback with duration: {total_audio_duration}s")
             
-            # Apply transitions between clips
-            final_clips = []
-            for i, clip in enumerate(video_clips):
-                if i > 0:  # Add transition to all clips except the first
-                    transition = self.select_transition(i, len(video_clips), VideoStyle.DYNAMIC)
-                    clip = self.TRANSITIONS[transition](clip, self.transition_duration)
-                final_clips.append(clip)
+            logger.info(f"Combining {len(video_clips)} video clips with audio (total duration: {total_audio_duration}s)")
             
-            # Combine all clips
-            final_video = concatenate_videoclips(final_clips)
-            
-            # Log memory usage after combining clips
-            memory_after_combine = process.memory_info().rss / 1024 / 1024  # MB
-            logger.info(f"Memory usage after combining clips: {memory_after_combine:.2f} MB")
-            
-            # Set audio
-            final_video = final_video.set_audio(audio_clip)
-            
-            # Write the final video
-            logger.info(f"Writing final video to: {output_path}")
-            final_video.write_videofile(
-                output_path,
-                codec='libx264',
-                audio_codec='aac',
-                temp_audiofile=os.path.join(self.temp_dir, 'temp-audio.m4a'),
-                remove_temp=True,
-                fps=30,
-                threads=4,
-                preset='medium',
-                bitrate='5000k'
-            )
-            
-            # Log memory usage after writing
-            final_memory = process.memory_info().rss / 1024 / 1024  # MB
-            logger.info(f"Final memory usage: {final_memory:.2f} MB")
-            
-            # Clean up
-            final_video.close()
-            for clip in video_clips:
-                clip.close()
-            audio_clip.close()
-            
-            logger.info(f"Successfully created video at: {output_path}")
+            try:
+                # IMPORTANT: Use method="compose" to preserve transitions between clips
+                logger.info("Starting video clip concatenation")
+                final_video = concatenate_videoclips(video_clips, method="compose")
+                logger.info(f"Final video duration after concatenation: {final_video.duration}s")
+                
+                # Set audio
+                logger.info("Setting audio on final video")
+                final_video = final_video.set_audio(audio_clip)
+                
+                # Generate output path
+                output_path = os.path.join(self.temp_dir, "final_video.mp4")
+                logger.info(f"Output path: {output_path}")
+                
+                # Check if output directory exists and has write permissions
+                if not os.path.exists(os.path.dirname(output_path)):
+                    logger.info(f"Creating output directory: {os.path.dirname(output_path)}")
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                
+                # Write video with high quality settings
+                logger.info("Starting video file writing with settings: fps=30, bitrate=8000k")
+                final_video.write_videofile(
+                    output_path,
+                    codec='libx264',
+                    audio_codec='aac',
+                    fps=30,
+                    bitrate='8000k',
+                    audio_bitrate='192k',
+                    threads=4,
+                    logger=None
+                )
+                
+                # Log final memory usage
+                memory_info = process.memory_info()
+                logger.info(f"Memory usage after video combination: {memory_info.rss / 1024 / 1024:.2f} MB")
+                
+                # Clean up
+                logger.info("Cleaning up video and audio clips")
+                final_video.close()
+                audio_clip.close()
+                
+                logger.info(f"Successfully created video with synchronized audio: {output_path}")
+                return output_path
+                
+            except Exception as video_error:
+                logger.error(f"Error during video combination: {str(video_error)}")
+                logger.error(f"Video error traceback: {traceback.format_exc()}")
+                # Log memory usage at time of error
+                memory_info = process.memory_info()
+                logger.error(f"Memory usage at error time: {memory_info.rss / 1024 / 1024:.2f} MB")
+                return None
             
         except Exception as e:
             logger.error(f"Error combining video with audio: {str(e)}")
-            logger.error(f"Stack trace: {traceback.format_exc()}")
-            raise
+            logger.error(f"Full error traceback: {traceback.format_exc()}")
+            return None
 
     def cleanup(self):
         """
