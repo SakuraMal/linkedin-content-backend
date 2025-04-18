@@ -71,6 +71,8 @@ class VideoRequest(BaseModel):
     videoPreferences: Optional[VideoPreferences] = Field(default=None, description="Video styling and caption preferences")
     # Media type to differentiate between AI-generated, custom uploaded, or stock media videos
     mediaType: Optional[str] = Field(default=None, description="Type of media content: 'ai', 'custom', or 'stock'")
+    # Add ttsText field for simplified caption handling
+    ttsText: Optional[str] = Field(default=None, description="Text used for TTS generation, to be used directly for captions")
     
     class Config:
         # Allow unknown fields to handle different frontend formats
@@ -83,4 +85,16 @@ class VideoRequest(BaseModel):
                 "voice": "en-US-Neural2-F",
                 "user_image_ids": ["550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-446655440001"]
             }
-        } 
+        }
+
+class TranscriptChunk(BaseModel):
+    text: str
+    start_time: float
+    end_time: float
+    tts_file: Optional[str] = None
+
+class Transcript(BaseModel):
+    chunks: List[TranscriptChunk]
+    total_duration: float
+    original_text: str
+    processed_text: str 

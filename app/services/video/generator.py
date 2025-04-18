@@ -18,10 +18,12 @@ import tempfile
 import psutil
 import requests
 import openai
+from moviepy.video.VideoClip import ColorClip
+from ...utils.feature_flag import is_feature_enabled
 from .caption_renderer import CaptionRenderer
-from ...config import is_feature_enabled
-from moviepy.editor import AudioFileClip, ColorClip
 import time
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
@@ -813,16 +815,60 @@ class VideoGenerator:
                         logger.error(f"Using original text for audio generation")
                         # Continue with original text if summarization fails
                 
-                # Now generate the audio with the processed or summarized text
-                audio_path = audio_generator.generate_audio(processed_text)
-                if audio_path:
-                    logger.info(f"Audio narration generated: {audio_path}")
-                    temp_files.append(audio_path)
-                    media_assets['videos'] = [audio_path]
-                    self.update_job_status(redis_client, job_id, "audio_generated", progress=68)
+                # Create transcript with chunks
+                logger.info("Creating transcript with chunks")
+                transcript = Transcript(
+                    chunks=[],
+                    total_duration=0,
+                    original_text=processed_text,
+                    processed_text=processed_text
+                )
+                
+                # Split into chunks and estimate timing
+                words = processed_text.split()
+                chunk_size = 10  # words per chunk
+                for i in range(0, len(words), chunk_size):
+                    chunk_text = ' '.join(words[i:i+chunk_size])
+                    duration = len(chunk_text.split()) / 2.5  # words per second
+                    
+                    transcript.chunks.append(TranscriptChunk(
+                        text=chunk_text,
+                        start_time=transcript.total_duration,
+                        end_time=transcript.total_duration + duration
+                    ))
+                    transcript.total_duration += duration
+                
+                logger.info(f"Created {len(transcript.chunks)} chunks with total duration {transcript.total_duration:.2f}s")
+                
+                # Generate audio for each chunk
+                audio_chunks = []
+                for i, chunk in enumerate(transcript.chunks):
+                    logger.info(f"Generating audio for chunk {i+1}/{len(transcript.chunks)}")
+                    chunk.tts_file = audio_generator.generate_audio(chunk.text)
+                    if chunk.tts_file:
+                        logger.info(f"Generated audio for chunk {i+1}: {chunk.tts_file}")
+                        audio_chunks.append(chunk.tts_file)
+                        temp_files.append(chunk.tts_file)
+                    else:
+                        logger.error(f"Failed to generate audio for chunk {i+1}")
+                
+                if audio_chunks:
+                    logger.info("Combining audio chunks")
+                    final_audio = media_processor.combine_audio_chunks(audio_chunks)
+                    if final_audio:
+                        logger.info(f"Successfully combined audio chunks: {final_audio}")
+                        temp_files.append(final_audio)
+                        media_assets['videos'] = [final_audio]
+                        self.update_job_status(redis_client, job_id, "audio_generated", progress=68)
+                    else:
+                        logger.error("Failed to combine audio chunks")
+                        # Fallback to silent audio
+                        from moviepy.audio.AudioClip import AudioClip
+                        silent_audio = AudioClip(lambda t: 0, duration=request.duration)
+                        final_video = media_processor.combine_with_audio(video_segments, silent_audio)
                 else:
-                    # If audio generation fails, create a silent audio clip
-                    logger.warning("Audio generation failed, using silent audio")
+                    logger.error("No audio chunks generated successfully")
+                    # Fallback to silent audio
                     from moviepy.audio.AudioClip import AudioClip
                     silent_audio = AudioClip(lambda t: 0, duration=request.duration)
                     final_video = media_processor.combine_with_audio(video_segments, silent_audio)
@@ -853,8 +899,38 @@ class VideoGenerator:
             self.update_job_status(redis_client, job_id, "uploading", progress=90)
             
             try:
-                video_url = storage_service.upload_video(final_video, job_id)
-                logger.info(f"Video uploaded: {video_url}")
+                # Verify the video file exists and has content before upload
+                if not os.path.exists(final_video):
+                    error_msg = f"Video file not found: {final_video}"
+                    logger.error(error_msg)
+                    self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+                    raise FileNotFoundError(error_msg)
+                
+                file_size = os.path.getsize(final_video)
+                if file_size == 0:
+                    error_msg = f"Video file is empty: {final_video}"
+                    logger.error(error_msg)
+                    self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+                    raise ValueError(error_msg)
+                
+                logger.info(f"Video file size: {file_size / (1024 * 1024):.2f} MB")
+                
+                # Attempt upload with retries
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        video_url = storage_service.upload_video(final_video, job_id)
+                        if video_url:
+                            logger.info(f"Video uploaded successfully: {video_url}")
+                            break
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            error_msg = f"Failed to upload video after {max_retries} attempts: {str(e)}"
+                            logger.error(error_msg)
+                            self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+                            raise
+                        logger.warning(f"Upload attempt {attempt + 1} failed: {str(e)}")
+                        time.sleep(2 ** attempt)  # Exponential backoff
                 
                 if not video_url:
                     error_msg = "Failed to upload video to storage - empty URL returned"
@@ -990,10 +1066,15 @@ class VideoGenerator:
                         logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Final captions_enabled value: {captions_enabled}")
                         
                         # Create caption renderer
-                        caption_renderer = CaptionRenderer(captions_enabled=captions_enabled, caption_prefs=caption_prefs)
+                        caption_renderer = CaptionRenderer(
+                            captions_enabled=captions_enabled,
+                            caption_prefs=caption_prefs,
+                            tts_text=processed_text
+                        )
                         
                         # Prepare caption data
                         caption_data = {
+                            "text": processed_text,
                             "timing": caption_timing
                         }
                         
@@ -1029,7 +1110,7 @@ class VideoGenerator:
                         else:
                             # If we have caption preferences but no timing data, try to generate timing from content
                             logger.info(f"🎬 CAPTION DEBUG [BACKEND]: No caption timing data available, will generate from content for job {job_id}")
-                            content_text = request.content if hasattr(request, 'content') else None
+                            content_text = processed_text if hasattr(processed_text, 'strip') else None
                             
                             if content_text:
                                 logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Generating captions from content text: {content_text[:100]}...")
@@ -1057,16 +1138,53 @@ class VideoGenerator:
                     else:
                         logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Captions disabled for job {job_id}")
                 
+                    # After the audio generation and before the final video creation
+                    if captions_enabled:
+                        try:
+                            # Try the new transcript-based approach first
+                            if hasattr(transcript, 'chunks') and transcript.chunks:
+                                logger.info("🎬 Using new transcript-based caption approach")
+                                final_video = media_processor.apply_captions(
+                                    video_path=final_video,
+                                    transcript=transcript,
+                                    caption_prefs=caption_prefs
+                                )
+                            else:
+                                # Fall back to the old caption renderer if transcript is not available
+                                logger.info("🎬 Falling back to old caption renderer")
+                                caption_renderer = CaptionRenderer(
+                                    captions_enabled=captions_enabled,
+                                    caption_prefs=caption_prefs,
+                                    tts_text=processed_text
+                                )
+                                final_video = caption_renderer.render_captions(
+                                    video_path=final_video,
+                                    caption_timing=caption_timing
+                                )
+                        except Exception as e:
+                            logger.error(f"Error applying captions: {str(e)}")
+                            # Continue with uncaptioned video if captioning fails
+                            pass
+                
+                    # Add detailed logging for caption processing
+                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Starting caption processing for job {job_id}")
+                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Captions enabled: {captions_enabled}")
+                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Has caption prefs: {caption_prefs is not None}")
+                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Has caption timing: {caption_timing is not None}")
+                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Has transcript: {hasattr(transcript, 'chunks')}")
+                    if hasattr(transcript, 'chunks'):
+                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Number of transcript chunks: {len(transcript.chunks)}")
+                
                 except Exception as e:
                     logger.error(f"🎬 CAPTION ERROR [BACKEND]: Error in caption processing for job {job_id}: {str(e)}")
                     logger.error(f"🎬 CAPTION ERROR [BACKEND]: Caption error traceback: {traceback.format_exc()}")
                     # Continue with original video if caption rendering fails
                 
                 return video_url
-            except Exception as upload_error:
-                error_msg = f"Error uploading video: {str(upload_error)}"
+            except Exception as e:
+                error_msg = f"Error during video upload: {str(e)}"
                 logger.error(error_msg)
-                logger.error(f"Upload error traceback: {traceback.format_exc()}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise
             
