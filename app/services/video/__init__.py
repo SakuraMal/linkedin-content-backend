@@ -10,4 +10,4 @@ from .storage import StorageService
 # Create singleton instances
 storage_service = StorageService()
 
-__all__ = ['VideoGenerator']
+__all__ = ['VideoGenerator', 'StorageService', 'MediaProcessor', 'CaptionRenderer']

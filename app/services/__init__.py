@@ -1,12 +1,6 @@
-"""
-Services package initialization.
-This file makes the services directory a proper Python package.
-"""
+from .video.generator import VideoGenerator
+from .video.storage import StorageService
+from .video.media_processor import MediaProcessor
+from .video.caption_renderer import CaptionRenderer
 
-from .video import VideoGenerator, MediaProcessor, CaptionRenderer, VideoStorage
-from .media import MediaProcessor as MediaServiceProcessor
-from .storage import StorageService
-from .openai import OpenAIService
-from .feature_flag import FeatureFlagService
-
-__all__ = []
+__all__ = ['VideoGenerator', 'StorageService', 'MediaProcessor', 'CaptionRenderer']
