@@ -7,7 +7,7 @@ from ..media.fetcher import media_fetcher
 from ..media.processor import media_processor
 from ..media.audio import audio_generator
 from ..media.text_processor import text_processor
-from .storage import storage_service
+from . import storage_service
 from ...models.video import VideoRequest, Transcript, TranscriptChunk
 from ..storage.image_storage import image_storage_service
 import traceback
