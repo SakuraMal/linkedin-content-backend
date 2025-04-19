@@ -42,6 +42,8 @@ class CaptionPreferences(BaseModel):
     enabled: bool = Field(default=False, description="Whether captions are enabled")
     style: Optional[CaptionStyle] = Field(default=None, description="Caption styling preferences")
     timing: Optional[List[CaptionTiming]] = Field(default=None, description="Caption timing data for each segment")
+    ttsText: Optional[str] = Field(default=None, description="Text to use for both TTS and captions")
+    enforceTtsTextForCaptions: Optional[bool] = Field(default=True, description="Whether to enforce using TTS text for captions")
     
     class Config:
         # Allow unknown fields for flexibility

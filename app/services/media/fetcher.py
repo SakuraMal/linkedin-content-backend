@@ -7,7 +7,7 @@ import tempfile
 import traceback
 import json
 import openai
-from .pexels_fetcher import pexels_fetcher
+from .pexels_fetcher import get_pexels_fetcher
 import random
 
 logger = logging.getLogger(__name__)
@@ -18,54 +18,23 @@ class MediaFetcher:
         """Initialize the MediaFetcher service."""
         # Fix for fly.io: ensure we use a writable directory
         try:
-            # First try using the standard temp directory
+            # First try using tempfile
             self.temp_dir = tempfile.mkdtemp(prefix='media_')
-            logger.debug(f"Created temp directory: {self.temp_dir}")
-            
-            # Test if the directory is writable
+            # Test if directory is writable
             test_file = os.path.join(self.temp_dir, 'test.txt')
             with open(test_file, 'w') as f:
                 f.write('test')
             os.remove(test_file)
-            logger.debug(f"Temp directory {self.temp_dir} is writable")
+            logger.info(f"Created temporary directory at {self.temp_dir}")
         except Exception as e:
-            # If standard temp directory fails, try alternatives
-            logger.warning(f"Failed to create temp directory with standard method: {str(e)}")
-            try:
-                # Try /tmp explicitly
-                self.temp_dir = os.path.join('/tmp', f'media_{os.getpid()}')
-                os.makedirs(self.temp_dir, exist_ok=True)
-                
-                # Test if directory is writable
-                test_file = os.path.join(self.temp_dir, 'test.txt')
-                with open(test_file, 'w') as f:
-                    f.write('test')
-                os.remove(test_file)
-                logger.debug(f"Created alternate temp directory: {self.temp_dir}")
-            except Exception as alt_e:
-                # Last resort: try current directory
-                logger.error(f"Failed to create alternate temp directory: {str(alt_e)}")
-                self.temp_dir = os.path.join(os.getcwd(), 'tmp_media')
-                os.makedirs(self.temp_dir, exist_ok=True)
-                logger.debug(f"Created fallback temp directory: {self.temp_dir}")
-        
-        self.unsplash_api_key = os.getenv('UNSPLASH_ACCESS_KEY')
-        if not self.unsplash_api_key:
-            logger.error("UNSPLASH_ACCESS_KEY not found in environment variables")
-            
-        logger.info(f"Initialized MediaFetcher with temp directory: {self.temp_dir}")
+            logger.error(f"Failed to create temporary directory: {e}")
+            raise
 
-    @property
-    def openai_client(self):
-        """Lazy initialization of OpenAI client."""
-        if not hasattr(self, '_openai_client'):
-            api_key = os.getenv('OPENAI_API_KEY')
-            if not api_key:
-                logger.error("OPENAI_API_KEY not found in environment variables")
-                raise ValueError("OPENAI_API_KEY environment variable is required")
-            
-            self._openai_client = openai.OpenAI(api_key=api_key)
-        return self._openai_client
+        # Initialize OpenAI client
+        self.openai_client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        if not self.openai_client.api_key:
+            logger.error("OPENAI_API_KEY not found in environment variables")
+            raise ValueError("OPENAI_API_KEY environment variable is required")
 
     def analyze_content_type(self, content: str) -> Dict[str, float]:
         """
@@ -247,68 +216,46 @@ class MediaFetcher:
             return None
 
     def fetch_media(self, content: str, duration: float = 15.0) -> Dict[str, List[str]]:
-        """
-        Fetch media assets for video generation with smart content analysis.
-        
-        Args:
-            content: Text content to generate media for
-            duration: Target video duration in seconds
-            
-        Returns:
-            Dictionary containing lists of image and video file paths
-        """
+        """Fetch media based on content analysis."""
         try:
-            # Step 1: Analyze content to determine optimal media distribution
-            distribution = self.analyze_content_type(content)
-            image_ratio = distribution["image_ratio"]
-            video_ratio = distribution["video_ratio"]
-            
-            # Calculate number of media items based on content analysis
-            total_slots = duration / 3  # Each media item gets ~3 seconds
-            num_images = min(max(3, round(total_slots * image_ratio)), 7)
-            num_videos = min(max(1, round(total_slots * video_ratio)), 3)
-            
-            logger.info(f"Content-based distribution - Images: {num_images} ({image_ratio:.1%}), Videos: {num_videos} ({video_ratio:.1%})")
-            logger.info(f"Distribution reasoning: {distribution.get('reasoning', 'Not provided')}")
-            
-            # Step 2: Extract highly detailed and visually descriptive keywords
+            # Get keywords from content
             keywords = self.extract_keywords(content)
-            if not keywords:
-                logger.error("No keywords extracted from content")
-                return {'images': [], 'videos': []}
+            logger.info(f"Extracted keywords: {keywords}")
+
+            # Get Pexels fetcher instance
+            pexels_fetcher = get_pexels_fetcher()
             
-            # Step 3: Fetch images with enhanced descriptive terms
-            image_paths = []
-            for keyword in keywords["static_keywords"]:
-                if len(image_paths) >= num_images:
-                    break
-                    
-                logger.info(f"Searching for images with enhanced term: '{keyword}'")
-                urls = self.fetch_unsplash_images(keyword, count=2)
-                for url in urls:
-                    if len(image_paths) >= num_images:
-                        break
-                        
-                    image_path = self.download_file(url)
-                    if image_path:
-                        image_paths.append(image_path)
-            
-            # Step 4: Fetch videos with enhanced search terms
-            video_paths = pexels_fetcher.fetch_relevant_videos(
-                keywords["dynamic_keywords"], 
-                count=num_videos
-            )
-            
-            logger.info(f"Successfully fetched {len(image_paths)} images and {len(video_paths)} videos with enhanced descriptive terms")
+            # Fetch videos from Pexels
+            videos = []
+            for keyword in keywords.get('video_keywords', []):
+                try:
+                    video_results = pexels_fetcher.search_videos(
+                        keyword,
+                        min_duration=int(duration * 0.8),
+                        max_duration=int(duration * 1.2)
+                    )
+                    videos.extend([video['video_files'][0]['link'] for video in video_results])
+                except Exception as e:
+                    logger.error(f"Error fetching videos for keyword {keyword}: {e}")
+                    continue
+
+            # Fetch images from Unsplash
+            images = []
+            for keyword in keywords.get('image_keywords', []):
+                try:
+                    image_results = self.fetch_unsplash_images(keyword)
+                    images.extend(image_results)
+                except Exception as e:
+                    logger.error(f"Error fetching images for keyword {keyword}: {e}")
+                    continue
+
             return {
-                'images': image_paths,
-                'videos': video_paths
+                'videos': videos,
+                'images': images
             }
-            
         except Exception as e:
-            logger.error(f"Error fetching media: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            return {'images': [], 'videos': []}
+            logger.error(f"Error in fetch_media: {e}")
+            raise
 
     def cleanup(self):
         """Remove all temporary files."""

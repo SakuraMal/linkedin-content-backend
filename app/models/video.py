@@ -92,6 +92,7 @@ class TranscriptChunk(BaseModel):
     start_time: float
     end_time: float
     tts_file: Optional[str] = None
+    caption_text: Optional[str] = None  # Text to use for captions, if different from TTS text
 
 class Transcript(BaseModel):
     chunks: List[TranscriptChunk]
