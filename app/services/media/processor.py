@@ -5,7 +5,7 @@ from PIL import Image, ImageFile
 from PIL.Image import Resampling
 from moviepy.editor import (
     ImageClip, AudioFileClip, concatenate_videoclips,
-    CompositeVideoClip, vfx, VideoFileClip, ColorClip, AudioClip
+    CompositeVideoClip, vfx, VideoFileClip, ColorClip, AudioClip, concatenate_audioclips
 )
 import tempfile
 import numpy as np
@@ -205,11 +205,50 @@ class MediaProcessor:
             AudioFileClip: Processed audio clip
         """
         try:
-            audio_clip = AudioFileClip(audio_path)
-            logger.info(f"Successfully processed audio: {audio_path}")
-            return audio_clip
+            logger.info(f"Processing audio file: {audio_path}")
+            return AudioFileClip(audio_path)
         except Exception as e:
             logger.error(f"Error processing audio {audio_path}: {str(e)}")
+            raise
+
+    def combine_audio_chunks(self, audio_chunks: List[str]) -> str:
+        """
+        Combine multiple audio chunks into a single audio file.
+        
+        Args:
+            audio_chunks: List of paths to audio chunk files
+            
+        Returns:
+            str: Path to the combined audio file
+        """
+        try:
+            logger.info(f"Combining {len(audio_chunks)} audio chunks")
+            
+            # Verify all chunks exist
+            for chunk in audio_chunks:
+                if not os.path.exists(chunk):
+                    raise FileNotFoundError(f"Audio chunk not found: {chunk}")
+            
+            # Load all audio chunks
+            audio_clips = [AudioFileClip(chunk) for chunk in audio_chunks]
+            
+            # Combine all clips
+            combined_audio = concatenate_audioclips(audio_clips)
+            
+            # Save the combined audio
+            output_path = os.path.join(self.temp_dir, "combined_audio.mp3")
+            combined_audio.write_audiofile(output_path, logger=None)
+            
+            # Close all clips to free resources
+            for clip in audio_clips:
+                clip.close()
+            combined_audio.close()
+            
+            logger.info(f"Successfully combined audio chunks into: {output_path}")
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Error combining audio chunks: {str(e)}")
             raise
 
     def process_video(self, video_path: str, target_duration: float = 3.0) -> VideoFileClip:
