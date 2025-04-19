@@ -8,7 +8,7 @@ from ..media.processor import media_processor
 from ..media.audio import audio_generator
 from ..media.text_processor import text_processor
 from .storage import storage_service
-from ...models.video import VideoRequest
+from ...models.video import VideoRequest, Transcript, TranscriptChunk
 from ..storage.image_storage import image_storage_service
 import traceback
 import math
@@ -18,13 +18,20 @@ import tempfile
 import psutil
 import requests
 import openai
-from .caption_renderer import CaptionRenderer
-from ...config import is_feature_enabled
-from moviepy.editor import AudioFileClip, ColorClip
+from moviepy.video.VideoClip import ColorClip
 import time
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)  # Ensure debug logging is enabled
+
+def is_feature_enabled(flag_name: str) -> bool:
+    """
+    Simple feature flag implementation.
+    For now, always return True for ENABLE_CAPTIONS.
+    """
+    return flag_name == "ENABLE_CAPTIONS"
 
 class VideoGenerator:
     STEPS = {
@@ -399,13 +406,32 @@ class VideoGenerator:
             
             # Process text to match target duration
             logger.info(f"Processing text to match duration: {request.duration}s")
-            processed_text = text_processor.process_text(request.content, request.duration)
-            if not processed_text:
-                error_msg = "Failed to process text for target duration"
-                logger.error(error_msg)
-                self.update_job_status(redis_client, job_id, "failed", error=error_msg)
-                raise Exception(error_msg)
-            logger.info("Text processed successfully")
+            
+            # Check if we have ttsText from the request
+            if request.ttsText:
+                logger.info("Using provided ttsText for TTS and captions")
+                processed_text = request.ttsText
+            else:
+                processed_text = text_processor.process_text(request.content, request.duration)
+                if not processed_text:
+                    error_msg = "Failed to process text for target duration"
+                    logger.error(error_msg)
+                    self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+                    raise Exception(error_msg)
+                logger.info("Text processed successfully")
+            
+            # Check if we should enforce using TTS text for captions
+            enforce_tts_text = True  # Default to True
+            if hasattr(request, 'videoPreferences') and request.videoPreferences and hasattr(request.videoPreferences, 'captions'):
+                if hasattr(request.videoPreferences.captions, 'enforceTtsTextForCaptions'):
+                    enforce_tts_text = request.videoPreferences.captions.enforceTtsTextForCaptions
+                elif isinstance(request.videoPreferences.captions, dict) and 'enforceTtsTextForCaptions' in request.videoPreferences.captions:
+                    enforce_tts_text = request.videoPreferences.captions['enforceTtsTextForCaptions']
+            
+            logger.info(f"Enforce TTS text for captions: {enforce_tts_text}")
+            
+            # Store the TTS text for later use in captions
+            tts_text = processed_text
             
             # Check video preferences for content analysis and segment matching
             video_prefs = request.videoPreferences if hasattr(request, 'videoPreferences') and request.videoPreferences is not None else {}
@@ -813,16 +839,69 @@ class VideoGenerator:
                         logger.error(f"Using original text for audio generation")
                         # Continue with original text if summarization fails
                 
-                # Now generate the audio with the processed or summarized text
-                audio_path = audio_generator.generate_audio(processed_text)
-                if audio_path:
-                    logger.info(f"Audio narration generated: {audio_path}")
-                    temp_files.append(audio_path)
-                    media_assets['videos'] = [audio_path]
-                    self.update_job_status(redis_client, job_id, "audio_generated", progress=68)
+                # Create transcript with chunks
+                logger.info("Creating transcript with chunks")
+                transcript = Transcript(
+                    chunks=[],
+                    total_duration=0,
+                    original_text=processed_text,
+                    processed_text=processed_text
+                )
+                
+                # Split into chunks and estimate timing
+                words = processed_text.split()
+                chunk_size = 10  # words per chunk
+                for i in range(0, len(words), chunk_size):
+                    chunk_text = ' '.join(words[i:i+chunk_size])
+                    duration = len(chunk_text.split()) / 2.5  # words per second
+                    
+                    # Use the same text for both TTS and captions if enforced
+                    if enforce_tts_text:
+                        caption_text = chunk_text
+                    else:
+                        # Use original text for captions if not enforced
+                        original_words = request.content.split()[i:i+chunk_size]
+                        caption_text = ' '.join(original_words) if original_words else chunk_text
+                    
+                    transcript.chunks.append(TranscriptChunk(
+                        text=chunk_text,
+                        start_time=transcript.total_duration,
+                        end_time=transcript.total_duration + duration,
+                        caption_text=caption_text  # Add caption text to the chunk
+                    ))
+                    transcript.total_duration += duration
+                
+                logger.info(f"Created {len(transcript.chunks)} chunks with total duration {transcript.total_duration:.2f}s")
+                
+                # Generate audio for each chunk
+                audio_chunks = []
+                for i, chunk in enumerate(transcript.chunks):
+                    logger.info(f"Generating audio for chunk {i+1}/{len(transcript.chunks)}")
+                    chunk.tts_file = audio_generator.generate_audio(chunk.text)
+                    if chunk.tts_file:
+                        logger.info(f"Generated audio for chunk {i+1}: {chunk.tts_file}")
+                        audio_chunks.append(chunk.tts_file)
+                        temp_files.append(chunk.tts_file)
+                    else:
+                        logger.error(f"Failed to generate audio for chunk {i+1}")
+                
+                if audio_chunks:
+                    logger.info("Combining audio chunks")
+                    final_audio = media_processor.combine_audio_chunks(audio_chunks)
+                    if final_audio:
+                        logger.info(f"Successfully combined audio chunks: {final_audio}")
+                        temp_files.append(final_audio)
+                        media_assets['videos'] = [final_audio]
+                        self.update_job_status(redis_client, job_id, "audio_generated", progress=68)
+                    else:
+                        logger.error("Failed to combine audio chunks")
+                        # Fallback to silent audio
+                        from moviepy.audio.AudioClip import AudioClip
+                        silent_audio = AudioClip(lambda t: 0, duration=request.duration)
+                        final_video = media_processor.combine_with_audio(video_segments, silent_audio)
                 else:
-                    # If audio generation fails, create a silent audio clip
-                    logger.warning("Audio generation failed, using silent audio")
+                    logger.error("No audio chunks generated successfully")
+                    # Fallback to silent audio
                     from moviepy.audio.AudioClip import AudioClip
                     silent_audio = AudioClip(lambda t: 0, duration=request.duration)
                     final_video = media_processor.combine_with_audio(video_segments, silent_audio)
@@ -853,8 +932,38 @@ class VideoGenerator:
             self.update_job_status(redis_client, job_id, "uploading", progress=90)
             
             try:
-                video_url = storage_service.upload_video(final_video, job_id)
-                logger.info(f"Video uploaded: {video_url}")
+                # Verify the video file exists and has content before upload
+                if not os.path.exists(final_video):
+                    error_msg = f"Video file not found: {final_video}"
+                    logger.error(error_msg)
+                    self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+                    raise FileNotFoundError(error_msg)
+                
+                file_size = os.path.getsize(final_video)
+                if file_size == 0:
+                    error_msg = f"Video file is empty: {final_video}"
+                    logger.error(error_msg)
+                    self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+                    raise ValueError(error_msg)
+                
+                logger.info(f"Video file size: {file_size / (1024 * 1024):.2f} MB")
+                
+                # Attempt upload with retries
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        video_url = storage_service.upload_video(final_video, job_id)
+                        if video_url:
+                            logger.info(f"Video uploaded successfully: {video_url}")
+                            break
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            error_msg = f"Failed to upload video after {max_retries} attempts: {str(e)}"
+                            logger.error(error_msg)
+                            self.update_job_status(redis_client, job_id, "failed", error=error_msg)
+                            raise
+                        logger.warning(f"Upload attempt {attempt + 1} failed: {str(e)}")
+                        time.sleep(2 ** attempt)  # Exponential backoff
                 
                 if not video_url:
                     error_msg = "Failed to upload video to storage - empty URL returned"
@@ -872,201 +981,11 @@ class VideoGenerator:
                 # Clean up temporary files
                 self.cleanup_temp_files(temp_files)
                 
-                # After the video is generated but before it's returned, add caption rendering
-                try:
-                    # Extract caption preferences from request
-                    captions_enabled = False
-                    caption_prefs = None
-                    caption_timing = None
-                    
-                    # Log detailed raw request properties for debugging
-                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Starting caption processing for job {job_id}")
-                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Raw request type: {type(request)}")
-                    
-                    # Log direct request fields
-                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Direct fields available: {[f for f in dir(request) if not f.startswith('_')]}")
-                    
-                    # Log information about the request structure
-                    if hasattr(request, 'model_dump'):
-                        try:
-                            dump = request.model_dump()
-                            logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Top-level fields in request: {list(dump.keys())}")
-                            if 'videoPreferences' in dump:
-                                logger.info(f"🎬 CAPTION DEBUG [BACKEND]: videoPreferences keys: {list(dump['videoPreferences'].keys())}")
-                                if 'captions' in dump['videoPreferences']:
-                                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Captions in videoPreferences: {dump['videoPreferences']['captions']}")
-                        except Exception as e:
-                            logger.error(f"🎬 CAPTION DEBUG [BACKEND]: Error dumping model: {str(e)}")
-                    
-                    # Check for X-Captions-Enabled header
-                    if hasattr(request, 'model_extra') and 'headers' in request.model_extra:
-                        headers = request.model_extra['headers']
-                        if isinstance(headers, dict) and 'X-Captions-Enabled' in headers:
-                            header_value = headers['X-Captions-Enabled']
-                            logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Found X-Captions-Enabled header: {header_value}")
-                            if header_value.lower() == 'true':
-                                logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Captions explicitly enabled via header")
-                    
-                    # Safely check for videoPreferences and captions
-                    if hasattr(request, 'videoPreferences') and request.videoPreferences is not None:
-                        video_prefs = request.videoPreferences
-                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Found videoPreferences directly on request")
-                        
-                        if hasattr(video_prefs, 'captions') and video_prefs.captions is not None:
-                            captions_enabled = getattr(video_prefs.captions, 'enabled', False)
-                            caption_prefs = video_prefs.captions.dict() if hasattr(video_prefs.captions, 'dict') else video_prefs.captions
-                            caption_timing = getattr(video_prefs.captions, 'timing', None)
-                            logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Found captions in videoPreferences: enabled={captions_enabled}, has_timing={caption_timing is not None}")
-                            if caption_timing:
-                                logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Caption timing data: {len(caption_timing)} segments")
-                                # Log first segment sample
-                                if len(caption_timing) > 0:
-                                    first_segment = caption_timing[0]
-                                    caption_chunks = getattr(first_segment, 'captionChunks', [])
-                                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: First segment caption chunks: {len(caption_chunks)} chunks")
-                                    if caption_chunks and len(caption_chunks) > 0:
-                                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: First caption chunk sample: {caption_chunks[0]}")
-
-                    # Also check in model_extra for captions
-                    elif hasattr(request, 'model_extra') and request.model_extra:
-                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Checking model_extra for captions")
-                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: model_extra keys: {list(request.model_extra.keys())}")
-                        
-                        if 'videoPreferences' in request.model_extra and request.model_extra['videoPreferences']:
-                            video_prefs = request.model_extra['videoPreferences']
-                            logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Found videoPreferences in model_extra")
-                            
-                            if isinstance(video_prefs, dict) and 'captions' in video_prefs:
-                                captions_enabled = video_prefs['captions'].get('enabled', False)
-                                caption_prefs = video_prefs['captions']
-                                caption_timing = video_prefs['captions'].get('timing', None)
-                                logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Found captions in model_extra: enabled={captions_enabled}, has_timing={caption_timing is not None}")
-                                if caption_timing:
-                                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Caption timing data from model_extra: {len(caption_timing)} segments")
-                        
-                        # Also check for top-level captions
-                        if 'captions' in request.model_extra:
-                            logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Found top-level captions in model_extra: {request.model_extra['captions']}")
-                            if isinstance(request.model_extra['captions'], dict) and 'enabled' in request.model_extra['captions']:
-                                captions_enabled = request.model_extra['captions'].get('enabled', False)
-                                caption_prefs = request.model_extra['captions']
-                                caption_timing = request.model_extra['captions'].get('timing', None)
-                                logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Using top-level captions from model_extra: enabled={captions_enabled}")
-                    
-                    # Look for contentAnalysis data if timing is not found
-                    if not caption_timing and hasattr(request, 'contentAnalysis') and request.contentAnalysis:
-                        logger.info("🎬 CAPTION DEBUG [BACKEND]: Looking for caption timing in contentAnalysis")
-                        if hasattr(request.contentAnalysis, 'segments') and request.contentAnalysis.segments:
-                            segments = request.contentAnalysis.segments
-                            logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Found {len(segments)} segments in contentAnalysis")
-                            
-                            # Check if any segment has timing with captionChunks
-                            has_caption_chunks = False
-                            for i, segment in enumerate(segments):
-                                if hasattr(segment, 'timing') and segment.timing:
-                                    if hasattr(segment.timing, 'captionChunks') and segment.timing.captionChunks:
-                                        has_caption_chunks = True
-                                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Segment {i} has {len(segment.timing.captionChunks)} caption chunks")
-                                        # Log first chunk sample
-                                        if len(segment.timing.captionChunks) > 0:
-                                            first_chunk = segment.timing.captionChunks[0]
-                                            logger.info(f"🎬 CAPTION DEBUG [BACKEND]: First chunk sample: {first_chunk}")
-                                        break
-                            
-                            if not has_caption_chunks:
-                                logger.warning("🎬 CAPTION DEBUG [BACKEND]: No captionChunks found in contentAnalysis segments")
-                    
-                    # Log the final decision about captions
-                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Final caption decision: enabled={captions_enabled}, has_prefs={caption_prefs is not None}, has_timing={caption_timing is not None}")
-                    
-                    # If captions are enabled, apply them to the video
-                    if captions_enabled:
-                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Caption rendering enabled for job {job_id}")
-                        feature_flag_enabled = is_feature_enabled("ENABLE_CAPTIONS")
-                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: ENABLE_CAPTIONS feature flag: {feature_flag_enabled}")
-                        
-                        # Final check if both enabled flag and feature flag are true
-                        captions_enabled = captions_enabled and feature_flag_enabled
-                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Final captions_enabled value: {captions_enabled}")
-                        
-                        # Create caption renderer
-                        caption_renderer = CaptionRenderer(captions_enabled=captions_enabled, caption_prefs=caption_prefs)
-                        
-                        # Prepare caption data
-                        caption_data = {
-                            "timing": caption_timing
-                        }
-                        
-                        # If we're using caption timing from content analysis
-                        if not caption_timing and hasattr(request, 'contentAnalysis') and request.contentAnalysis:
-                            if hasattr(request.contentAnalysis, 'segments') and request.contentAnalysis.segments:
-                                caption_data["timing"] = request.contentAnalysis.segments
-                                logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Using timing data from content analysis for job {job_id}")
-                        
-                        # Apply captions to the video
-                        if caption_data["timing"]:
-                            logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Applying captions to video for job {job_id}")
-                            logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Caption data timing has {len(caption_data['timing'])} entries")
-                            
-                            try:
-                                temp_dir = tempfile.gettempdir()
-                                captioned_video = caption_renderer.render_captions(
-                                    video_path=final_video, 
-                                    caption_data=caption_data, 
-                                    work_dir=temp_dir
-                                )
-                                
-                                if captioned_video and captioned_video != final_video:
-                                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Successfully applied captions to video for job {job_id}")
-                                    logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Original path: {final_video}, Captioned path: {captioned_video}")
-                                    final_video = captioned_video
-                                else:
-                                    logger.warning(f"🎬 CAPTION DEBUG [BACKEND]: Caption renderer returned original video, captions may not have been applied")
-                            except Exception as e:
-                                logger.error(f"🎬 CAPTION ERROR [BACKEND]: Error applying captions: {str(e)}")
-                                logger.error(f"🎬 CAPTION ERROR [BACKEND]: Error traceback: {traceback.format_exc()}")
-                                # Continue without captions
-                        else:
-                            # If we have caption preferences but no timing data, try to generate timing from content
-                            logger.info(f"🎬 CAPTION DEBUG [BACKEND]: No caption timing data available, will generate from content for job {job_id}")
-                            content_text = request.content if hasattr(request, 'content') else None
-                            
-                            if content_text:
-                                logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Generating captions from content text: {content_text[:100]}...")
-                                try:
-                                    temp_dir = tempfile.gettempdir()
-                                    captioned_video = caption_renderer.render_captions(
-                                        video_path=final_video, 
-                                        caption_data=caption_data, 
-                                        work_dir=temp_dir,
-                                        content=content_text
-                                    )
-                                    
-                                    if captioned_video and captioned_video != final_video:
-                                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Successfully applied auto-generated captions to video for job {job_id}")
-                                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Original path: {final_video}, Captioned path: {captioned_video}")
-                                        final_video = captioned_video
-                                    else:
-                                        logger.warning(f"🎬 CAPTION DEBUG [BACKEND]: Caption renderer with auto-generated timing returned original video")
-                                except Exception as e:
-                                    logger.error(f"🎬 CAPTION ERROR [BACKEND]: Error applying auto-generated captions: {str(e)}")
-                                    logger.error(f"🎬 CAPTION ERROR [BACKEND]: Error traceback: {traceback.format_exc()}")
-                                    # Continue without captions
-                            else:
-                                logger.warning(f"🎬 CAPTION DEBUG [BACKEND]: No content available for caption generation for job {job_id}")
-                    else:
-                        logger.info(f"🎬 CAPTION DEBUG [BACKEND]: Captions disabled for job {job_id}")
-                
-                except Exception as e:
-                    logger.error(f"🎬 CAPTION ERROR [BACKEND]: Error in caption processing for job {job_id}: {str(e)}")
-                    logger.error(f"🎬 CAPTION ERROR [BACKEND]: Caption error traceback: {traceback.format_exc()}")
-                    # Continue with original video if caption rendering fails
-                
                 return video_url
-            except Exception as upload_error:
-                error_msg = f"Error uploading video: {str(upload_error)}"
+            except Exception as e:
+                error_msg = f"Error during video upload: {str(e)}"
                 logger.error(error_msg)
-                logger.error(f"Upload error traceback: {traceback.format_exc()}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 self.update_job_status(redis_client, job_id, "failed", error=error_msg)
                 raise
             
