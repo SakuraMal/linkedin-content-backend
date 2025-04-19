@@ -29,27 +29,20 @@ class PexelsFetcher:
             with open(test_file, 'w') as f:
                 f.write('test')
             os.remove(test_file)
-            logger.debug(f"Temp directory {self.temp_dir} is writable")
+            logger.info(f"Created temporary directory at {self.temp_dir}")
         except Exception as e:
-            logger.warning(f"Could not create temp directory with tempfile: {str(e)}")
-            try:
-                # If tempfile fails, try using /tmp directly
-                self.temp_dir = os.path.join('/tmp', f'pexels_{os.getpid()}')
-                os.makedirs(self.temp_dir, exist_ok=True)
-                # Test if directory is writable
-                test_file = os.path.join(self.temp_dir, 'test.txt')
-                with open(test_file, 'w') as f:
-                    f.write('test')
-                os.remove(test_file)
-                logger.debug(f"Created alternate temp directory: {self.temp_dir}")
-            except Exception as e2:
-                logger.warning(f"Could not create temp directory in /tmp: {str(e2)}")
-                # Last resort, use a local directory
-                self.temp_dir = os.path.join(os.getcwd(), 'tmp_pexels')
-                os.makedirs(self.temp_dir, exist_ok=True)
-                logger.debug(f"Created fallback temp directory: {self.temp_dir}")
-                
-        logger.info(f"Initialized PexelsFetcher with temp directory: {self.temp_dir}")
+            logger.error(f"Failed to create temporary directory: {e}")
+            raise
+
+# Create a singleton instance that will be initialized when first accessed
+_pexels_fetcher = None
+
+def get_pexels_fetcher():
+    """Get the singleton instance of PexelsFetcher, initializing it if necessary."""
+    global _pexels_fetcher
+    if _pexels_fetcher is None:
+        _pexels_fetcher = PexelsFetcher()
+    return _pexels_fetcher
 
     def search_videos(self, query: str, min_duration: int = MIN_DURATION, 
                      max_duration: int = MAX_DURATION, per_page: int = 5) -> List[Dict]:
@@ -224,7 +217,4 @@ class PexelsFetcher:
             shutil.rmtree(self.temp_dir)
             logger.info(f"Cleaned up temporary directory: {self.temp_dir}")
         except Exception as e:
-            logger.error(f"Error cleaning up temporary files: {str(e)}")
-
-# Create a singleton instance
-pexels_fetcher = PexelsFetcher() 
+            logger.error(f"Error cleaning up temporary files: {str(e)}") 

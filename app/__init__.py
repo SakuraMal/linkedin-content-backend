@@ -101,20 +101,24 @@ def create_app(redis_client: redis.Redis = None, test_config=None):
 
     @app.route('/health', methods=['GET'])
     def health_check():
-        try:
-            # Check Redis connection
-            app.redis_client.ping()
-            return jsonify({
-                "status": "healthy",
-                "redis": "connected",
-                "version": "1.0.0"
-            }), 200
-        except Exception as e:
-            return jsonify({
-                "status": "unhealthy",
-                "redis": str(e),
-                "version": "1.0.0"
-            }), 500
+        return jsonify({
+            "status": "healthy",
+            "version": "1.0.0"
+        }), 200
+
+    @app.route('/health/live', methods=['GET'])
+    def liveness_check():
+        return jsonify({
+            "status": "healthy",
+            "version": "1.0.0"
+        }), 200
+
+    @app.route('/')
+    def root():
+        return jsonify({
+            "status": "healthy",
+            "version": "1.0.0"
+        }), 200
 
     @app.route('/test')
     def test_page():

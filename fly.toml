@@ -23,22 +23,48 @@ primary_region = "mad"
   force_https = true
   auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 2
+  min_machines_running = 1
   processes = ["app"]
 
   [http_service.concurrency]
     type = "connections"
-    hard_limit = 1000
-    soft_limit = 500
+    hard_limit = 25
+    soft_limit = 20
+
+  [[http_service.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[http_service.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [http_service.ports.tls_options]
+    alpn = ["http/1.1"]
+    versions = ["TLSv1.2", "TLSv1.3"]
+
+  [[http_service.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "1s"
 
   [[http_service.checks]]
-    interval = "15s"
+    interval = "30s"
     timeout = "5s"
-    grace_period = "30s"
+    grace_period = "10s"
     method = "GET"
     path = "/health"
     protocol = "http"
-    tls_skip_verify = true
+    tls_skip_verify = false
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/"
+    protocol = "http"
+    tls_skip_verify = false
 
 [[vm]]
   memory = '4gb'
