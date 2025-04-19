@@ -1,9 +1,17 @@
+import os
+import sys
 from typing import List, Optional
 from moviepy.editor import VideoFileClip, AudioFileClip, CompositeVideoClip, TextClip
 from moviepy.audio.AudioClip import concatenate_audioclips
-import os
 import logging
-from ...models.video import Transcript
+
+# Add the project root to Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, '../../../'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from app.models.video import Transcript
 
 logger = logging.getLogger(__name__)
 
